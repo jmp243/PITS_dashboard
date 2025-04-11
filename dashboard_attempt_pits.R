@@ -78,38 +78,6 @@ ratio_data <- MyPC_counts %>%
     infraction_count = ifelse(is.na(infraction_count), 0, infraction_count),
     user_count = ifelse(is.na(user_count), 0, user_count)
   ) 
-# # Step 3: Calculate the ratio
-# ratio_data <- ratio_data %>%
-#   # Avoid division by zero
-#   mutate(
-#     ratio = ifelse(user_count > 0, infraction_count / user_count, 0),
-#     # Multiply by 100 to get percentage
-#     ratio_percentage = ratio * 100
-#   )
-# 
-# Prepare the data
-# summary_table <- ratio_data %>%
-#   group_by(Location_Standard, date) %>%
-#   summarize(
-#     Total_Users = sum(user_count, na.rm = TRUE),
-#     Total_Infractions = sum(infraction_count, na.rm = TRUE),
-#     Average_Daily_Users = mean(user_count, na.rm = TRUE),
-#     Average_Daily_Infractions = mean(infraction_count, na.rm = TRUE),
-#     
-#     # Calculate ratio per 1000 users
-#     Infractions_Per_1000_Users = ifelse(
-#       Total_Users > 0, 
-#       (Total_Infractions / Total_Users) * 1000, 
-#       0
-#     )
-#   ) %>%
-#   # Round numeric columns to 2 decimal places
-#   mutate(
-#     Total_Users = ifelse(Total_Users == 0, 0.1, Total_Users),
-#     Average_Daily_Users = round(Average_Daily_Users, 2),
-#     Average_Daily_Infractions = round(Average_Daily_Infractions, 2),
-#     Infractions_Per_1000_Users = round(Infractions_Per_1000_Users, 2)
-#   )
 
 # App colours
 theme <- create_theme(
@@ -176,11 +144,13 @@ ui <- dashboardPage(
       box(
         title = "MyPC",
         width = 4,
+        height = "100%", 
         plotlyOutput("plot_MyPC")
       ),
       box(
         title = "Ratio Table",
         width = 8,
+        height = "100%", 
         DTOutput("summary_ratio_table")
       )
     ),
@@ -189,12 +159,14 @@ ui <- dashboardPage(
       box(
         title = "Incidents by Type, Location, and Time",
         width = 8,
+        height = "100%", 
         plotlyOutput("plot_PITS_by_type_location_time")
       ),
 
       box(
         title = "Types of incidents",
         width = 4,
+        height = "100%", 
         DTOutput("table_data")
       )
     ),
