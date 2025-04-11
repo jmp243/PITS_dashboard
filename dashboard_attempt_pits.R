@@ -1,3 +1,7 @@
+# 2025-4-10
+# Jung Mee Park
+# jmp243
+
 # Load required packages
 library(shiny)
 library(bslib)
@@ -27,10 +31,18 @@ library(fresh)
 thematic_shiny()
 ggplot2::theme_set(ggplot2::theme_minimal())
 
+# load in data 
+PITS_public <- read_csv("processed_data/PITS_public2.csv") %>% select(-1)
+PITS_public <- PITS_public %>% 
+  mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
+
+MyPC_public <- read_csv("processed_data/MyPC_public.csv") %>% select(-1) %>% 
+  mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
 #############################
 # streamlined ratio process #
 #############################
-MyPC_counts <- read_csv("data/processed_data/MyPC_public.csv") %>%
+MyPC_counts <- MyPC_public %>%
+# MyPC_counts <- read_csv("data/processed_data/MyPC_public.csv") %>%
   select(-1) %>%  # Remove first column
   rename(date = booking_from) %>%
   group_by(Location_Standard, date) %>%
@@ -44,7 +56,7 @@ PITS_counts <- PITS_public %>%
 
 # Aggregate MyPC data by location and date
 MyPC_counts <- MyPC_public %>%
-  rename(date = booking_from) %>%
+  rename(date = booking_date) %>%
   group_by(Location_Standard, date) %>%
   summarize(user_count = n(), .groups = "drop")
 
@@ -54,9 +66,7 @@ ratio_data <- MyPC_counts %>%
   mutate(
     infraction_count = ifelse(is.na(infraction_count), 0, infraction_count),
     user_count = ifelse(is.na(user_count), 0, user_count)
-  ) %>%
-  filter(date >= as.Date("2024-01-01"))  # Adjust date range as needed
-
+  ) 
 # Step 3: Calculate the ratio
 ratio_data <- ratio_data %>%
   # Avoid division by zero
@@ -65,6 +75,35 @@ ratio_data <- ratio_data %>%
     # Multiply by 100 to get percentage
     ratio_percentage = ratio * 100
   )
+# 
+# # Aggregate MyPC data by location and date
+# MyPC_counts <- data2() %>%
+#   dplyr::mutate(date = as.Date(booking_date)) %>%
+#   group_by(Location_Standard, date) %>%
+#   summarize(user_count = n(), .groups = "drop")
+# 
+# # Aggregate PITS data by location and date
+# PITS_counts <- data() %>%
+#   mutate(date = as.Date(Date2)) %>%
+#   group_by(Location_Standard, date) %>%
+#   summarize(infraction_count = n(), .groups = "drop")
+# 
+# # Join the datasets
+# ratio_data <- MyPC_counts %>%
+#   full_join(PITS_counts, by = c("Location_Standard", "date")) %>%
+#   mutate(
+#     infraction_count = ifelse(is.na(infraction_count), 0, infraction_count),
+#     user_count = ifelse(is.na(user_count), 0, user_count)
+#   ) 
+# 
+# # Calculate the ratio
+# ratio_data <- ratio_data %>%
+#   # Avoid division by zero
+#   mutate(
+#     ratio = ifelse(user_count > 0, infraction_count / user_count, 0),
+#     # Multiply by 100 to get percentage
+#     ratio_percentage = ratio * 100
+#   )
 
 # Prepare the data
 summary_table <- ratio_data %>%
@@ -158,20 +197,25 @@ ui <- dashboardPage(
         plotlyOutput("plot_MyPC")
       ),
       box(
-        title = "Types of incidents",
+        title = "Ratio Table",
         width = 6,
-        DTOutput("table_data")
+        DTOutput("summary_ratio_table")
       )
     ),
     
     fluidRow(
       box(
         title = "Incidents by Type, Location, and Time",
-        width = 12,
+        width = 8,
         plotlyOutput("plot_PITS_by_type_location_time")
+      ),
+
+      box(
+        title = "Types of incidents",
+        width = 4,
+        DTOutput("table_data")
       )
-      
-    )
+    ),
     
   )
 )
@@ -180,10 +224,7 @@ ui <- dashboardPage(
 
 # Define dashboard server
 server <- function(input, output, session) {
-  # Load data once outside reactives
-  PITS_public <- read_csv("data/processed_data/PITS_public2.csv") %>% select(-1)
-  MyPC_public <- read_csv("data/processed_data/MyPC_public.csv") %>% select(-1)
-  
+  # 
   # PITS data reactive
   data <- reactive({
     filtered_data <- PITS_public
@@ -219,6 +260,62 @@ server <- function(input, output, session) {
     }
     
     return(filtered_data)
+  })
+  # Add new reactive for the summary table data
+  summary_table_data <- reactive({
+    # Prepare the summary table
+    filtered_data <- ratio_data %>%
+      group_by(Location_Standard, date) %>%
+      summarize(
+        Total_Users = sum(user_count, na.rm = TRUE),
+        Total_Infractions = sum(infraction_count, na.rm = TRUE),
+        Average_Daily_Users = mean(user_count, na.rm = TRUE),
+        Average_Daily_Infractions = mean(infraction_count, na.rm = TRUE),
+        
+        # Calculate ratio per 1000 users
+        Infractions_Per_1000_Users = ifelse(
+          Total_Users > 0, 
+          (Total_Infractions / Total_Users) * 1000, 
+          0
+        )
+      ) %>%
+      # Round numeric columns to 2 decimal places
+      mutate(
+        Total_Users = ifelse(Total_Users == 0, 0.1, Total_Users),
+        Average_Daily_Users = round(Average_Daily_Users, 2),
+        Average_Daily_Infractions = round(Average_Daily_Infractions, 2),
+        Infractions_Per_1000_Users = round(Infractions_Per_1000_Users, 2)
+      )
+    # Apply date filter if available
+    if (!is.null(input$date)) {
+      filtered_data <- filtered_data %>% 
+        filter(between(date, input$selected_date[1], input$selected_date[2]))
+    }
+    
+    # Apply location filter
+    if (!is.null(input$Location) && !"All" %in% input$Location) {
+      filtered_data <- filtered_data %>% 
+        filter(Location_Standard %in% input$Location)
+    }
+    return(filtered_data)
+  })
+
+  # Render the summary table output
+  output$summary_ratio_table <- renderDT({
+    datatable(summary_table_data(),
+              options = list(
+                pageLength = 10,
+                scrollX = TRUE,
+                dom = 'Bfrtip',
+                buttons = c('copy', 'csv', 'excel', 'pdf')
+              ),
+              extensions = 'Buttons',
+              rownames = FALSE) %>%
+      formatStyle('Infractions_Per_1000_Users',
+                  background = styleColorBar(c(0, max(summary_table_data()$Infractions_Per_1000_Users)), 'lightblue'),
+                  backgroundSize = '100% 90%',
+                  backgroundRepeat = 'no-repeat',
+                  backgroundPosition = 'center')
   })
   
   # MyPC plot output
@@ -279,7 +376,9 @@ server <- function(input, output, session) {
                hour_label, .keep_all = TRUE) %>%
       group_by(Location_Standard, Date2, hour_label, Incident_Type = parsed_categories) %>%
       summarise(Count = n(), .groups = 'drop') %>%
-      mutate(Date2 = as.Date(Date2))
+      mutate(Date2 = as.Date(Date2)) %>%
+      arrange(as.numeric(substr(hour_label, 1, 2)))
+    
     
     plot_ly(incident_counts, 
             x = ~hour_label, 
@@ -299,10 +398,9 @@ server <- function(input, output, session) {
         hovermode = "compare"
       )
   })
-  
-  # Data table output
   output$table_data <- renderDT({
-    data() %>%
+    # Create the data frame first
+    table_data <- data() %>%
       select(Location_Standard, Date2, parsed_categories) %>% 
       group_by(parsed_categories) %>%
       summarise(count = n(), .groups = "drop") %>%
@@ -312,8 +410,36 @@ server <- function(input, output, session) {
       rename(categories = parsed_categories) %>% 
       arrange(desc(count))
     
-    
+    # Then apply the formatting
+    datatable(table_data,
+              options = list(
+                pageLength = 8,
+                scrollX = TRUE,
+                dom = 'Bfrtip',
+                buttons = c('copy', 'csv', 'excel', 'pdf')
+              ),
+              extensions = 'Buttons',
+              rownames = FALSE) %>%
+      formatStyle('count',
+                  background = styleColorBar(c(0, max(table_data$count)), 'lightblue'),
+                  backgroundSize = '100% 90%',
+                  backgroundRepeat = 'no-repeat',
+                  backgroundPosition = 'center')
   })
+  # # Data table output
+  # output$table_data <- renderDT({
+  #   data() %>%
+  #     select(Location_Standard, Date2, parsed_categories) %>% 
+  #     group_by(parsed_categories) %>%
+  #     summarise(count = n(), .groups = "drop") %>%
+  #     mutate(
+  #       percentage = paste0(round((count / sum(count)) * 100, 1), "%")
+  #     ) %>%
+  #     rename(categories = parsed_categories) %>% 
+  #     arrange(desc(count))
+  #   
+  #   
+  # })
 }
 
 # Run the Shiny app
