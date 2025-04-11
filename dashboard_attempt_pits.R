@@ -36,8 +36,19 @@ PITS_public <- read_csv("processed_data/PITS_public2.csv") %>% select(-1)
 PITS_public <- PITS_public %>% 
   mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
 
-MyPC_public <- read_csv("processed_data/MyPC_public.csv") %>% select(-1) %>% 
+MyPC_public <- read_csv("processed_data/MyPC_public.csv") %>% select(-1) 
+MyPC_public <- MyPC_public %>% 
   mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
+
+hourly_usage <- MyPC_public %>%
+  group_by(Location_Standard, hour_label, booking_date) %>%
+  summarize(count = n(), .groups = "drop") %>% 
+  arrange(as.numeric(substr(hour_label, 1, 2)))
+  # mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
+# 
+
+levels(hourly_usage$hour_label)
+
 #############################
 # streamlined ratio process #
 #############################
@@ -67,36 +78,7 @@ ratio_data <- MyPC_counts %>%
     infraction_count = ifelse(is.na(infraction_count), 0, infraction_count),
     user_count = ifelse(is.na(user_count), 0, user_count)
   ) 
-# Step 3: Calculate the ratio
-ratio_data <- ratio_data %>%
-  # Avoid division by zero
-  mutate(
-    ratio = ifelse(user_count > 0, infraction_count / user_count, 0),
-    # Multiply by 100 to get percentage
-    ratio_percentage = ratio * 100
-  )
-# 
-# # Aggregate MyPC data by location and date
-# MyPC_counts <- data2() %>%
-#   dplyr::mutate(date = as.Date(booking_date)) %>%
-#   group_by(Location_Standard, date) %>%
-#   summarize(user_count = n(), .groups = "drop")
-# 
-# # Aggregate PITS data by location and date
-# PITS_counts <- data() %>%
-#   mutate(date = as.Date(Date2)) %>%
-#   group_by(Location_Standard, date) %>%
-#   summarize(infraction_count = n(), .groups = "drop")
-# 
-# # Join the datasets
-# ratio_data <- MyPC_counts %>%
-#   full_join(PITS_counts, by = c("Location_Standard", "date")) %>%
-#   mutate(
-#     infraction_count = ifelse(is.na(infraction_count), 0, infraction_count),
-#     user_count = ifelse(is.na(user_count), 0, user_count)
-#   ) 
-# 
-# # Calculate the ratio
+# # Step 3: Calculate the ratio
 # ratio_data <- ratio_data %>%
 #   # Avoid division by zero
 #   mutate(
@@ -104,30 +86,30 @@ ratio_data <- ratio_data %>%
 #     # Multiply by 100 to get percentage
 #     ratio_percentage = ratio * 100
 #   )
-
+# 
 # Prepare the data
-summary_table <- ratio_data %>%
-  group_by(Location_Standard, date) %>%
-  summarize(
-    Total_Users = sum(user_count, na.rm = TRUE),
-    Total_Infractions = sum(infraction_count, na.rm = TRUE),
-    Average_Daily_Users = mean(user_count, na.rm = TRUE),
-    Average_Daily_Infractions = mean(infraction_count, na.rm = TRUE),
-    
-    # Calculate ratio per 1000 users
-    Infractions_Per_1000_Users = ifelse(
-      Total_Users > 0, 
-      (Total_Infractions / Total_Users) * 1000, 
-      0
-    )
-  ) %>%
-  # Round numeric columns to 2 decimal places
-  mutate(
-    Total_Users = ifelse(Total_Users == 0, 0.1, Total_Users),
-    Average_Daily_Users = round(Average_Daily_Users, 2),
-    Average_Daily_Infractions = round(Average_Daily_Infractions, 2),
-    Infractions_Per_1000_Users = round(Infractions_Per_1000_Users, 2)
-  )
+# summary_table <- ratio_data %>%
+#   group_by(Location_Standard, date) %>%
+#   summarize(
+#     Total_Users = sum(user_count, na.rm = TRUE),
+#     Total_Infractions = sum(infraction_count, na.rm = TRUE),
+#     Average_Daily_Users = mean(user_count, na.rm = TRUE),
+#     Average_Daily_Infractions = mean(infraction_count, na.rm = TRUE),
+#     
+#     # Calculate ratio per 1000 users
+#     Infractions_Per_1000_Users = ifelse(
+#       Total_Users > 0, 
+#       (Total_Infractions / Total_Users) * 1000, 
+#       0
+#     )
+#   ) %>%
+#   # Round numeric columns to 2 decimal places
+#   mutate(
+#     Total_Users = ifelse(Total_Users == 0, 0.1, Total_Users),
+#     Average_Daily_Users = round(Average_Daily_Users, 2),
+#     Average_Daily_Infractions = round(Average_Daily_Infractions, 2),
+#     Infractions_Per_1000_Users = round(Infractions_Per_1000_Users, 2)
+#   )
 
 # App colours
 theme <- create_theme(
@@ -193,12 +175,12 @@ ui <- dashboardPage(
     fluidRow(
       box(
         title = "MyPC",
-        width = 6,
+        width = 4,
         plotlyOutput("plot_MyPC")
       ),
       box(
         title = "Ratio Table",
-        width = 6,
+        width = 8,
         DTOutput("summary_ratio_table")
       )
     ),
@@ -265,7 +247,7 @@ server <- function(input, output, session) {
   summary_table_data <- reactive({
     # Prepare the summary table
     filtered_data <- ratio_data %>%
-      group_by(Location_Standard, date) %>%
+      group_by(Location_Standard) %>%
       summarize(
         Total_Users = sum(user_count, na.rm = TRUE),
         Total_Infractions = sum(infraction_count, na.rm = TRUE),
@@ -304,7 +286,7 @@ server <- function(input, output, session) {
   output$summary_ratio_table <- renderDT({
     datatable(summary_table_data(),
               options = list(
-                pageLength = 10,
+                pageLength = 8,
                 scrollX = TRUE,
                 dom = 'Bfrtip',
                 buttons = c('copy', 'csv', 'excel', 'pdf')
@@ -324,8 +306,14 @@ server <- function(input, output, session) {
     
     # Process data from reactive
     hourly_usage <- data2() %>%
-      group_by(hour_label, Location_Standard, booking_date) %>%
-      summarize(count = n(), .groups = "drop") %>%
+      group_by(Location_Standard, hour_label, booking_date) %>%
+      summarize(count = n(), .groups = "drop")
+    
+    # Format hour_label consistently as "HH:00" (ensuring two digits)
+    hourly_usage$hour_label <- sprintf("%02d:00", as.numeric(substr(hourly_usage$hour_label, 1, 2)))
+    
+    # Sort based on the hour number for data processing
+    hourly_usage <- hourly_usage %>% 
       arrange(as.numeric(substr(hour_label, 1, 2)))
     
     # Get unique locations for color palette
@@ -339,9 +327,12 @@ server <- function(input, output, session) {
       my_palette <- colorRampPalette(my_palette)(n_locations)
     }
     
+    # Create the ordered hour categories
+    hour_categories <- sprintf("%02d:00", 0:23)
+    
     # Create plot
     plot_ly(hourly_usage, 
-            x = ~hour_label, 
+            x = ~factor(hour_label, levels = hour_categories), # Force proper ordering 
             y = ~count, 
             color = ~Location_Standard, 
             type = "bar",
@@ -357,17 +348,15 @@ server <- function(input, output, session) {
         title = "Computer Usage by Hour of Day",
         xaxis = list(
           title = "Hour of Day", 
-          tickangle = 45,
-          categoryorder = "array",
-          categoryarray = paste0(0:23, ":00")
+          tickangle = 45
         ),
         yaxis = list(title = "Number of Sessions"),
         barmode = "stack",
         hovermode = "compare",
-        showlegend = FALSE
+        showlegend = FALSE # Changed to TRUE for better readability
       )
   })
-  
+
   # PITS plot output
   output$plot_PITS_by_type_location_time <- renderPlotly({
     incident_counts <- data() %>%
