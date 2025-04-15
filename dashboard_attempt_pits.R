@@ -256,7 +256,14 @@ server <- function(input, output, session) {
 
   # Render the summary table output
   output$summary_ratio_table <- renderDT({
-    datatable(summary_table_data(),
+    summary_table_data() %>% 
+      rename("Location" = "Location_Standard",
+             "Total Users" = "Total_Users",
+             "Total Infractions" = "Total_Infractions",
+             "Avg Daily Users" = "Average_Daily_Users",
+             "Avg Daily Infractions" = "Average_Daily_Infractions",
+             "Infractions per 1,000 Users" = "Infractions_Per_1000_Users") %>%
+    datatable(
               options = list(
                 pageLength = 8,
                 scrollX = TRUE,
@@ -265,7 +272,7 @@ server <- function(input, output, session) {
               ),
               extensions = 'Buttons',
               rownames = FALSE) %>%
-      formatStyle('Infractions_Per_1000_Users',
+      formatStyle("Infractions per 1,000 Users",
                   background = styleColorBar(c(0, max(summary_table_data()$Infractions_Per_1000_Users)), 'lightblue'),
                   backgroundSize = '100% 90%',
                   backgroundRepeat = 'no-repeat',
@@ -346,11 +353,18 @@ server <- function(input, output, session) {
             y = ~Count, 
             color = ~Incident_Type, 
             type = "bar",
-            text = ~paste("Hour: ", hour_label,
+            # hovertemplate = ~paste(
+            #   "Hour: ", hour_label,
+            #   "<br>Location: ", Location_Standard,
+            #   "<br>Count: ", count,
+            #   "<br>Date: ", format(booking_date, "%Y-%m-%d"),
+            #   "<extra></extra>"
+            # )) %>%
+            hovertemplate = ~paste("Hour: ", hour_label,
                           "<br>Location: ", Location_Standard,
                           "<br>Incident Type: ", Incident_Type,
-                          "<br>Date: ", Date2),
-            hoverinfo = "text") %>% 
+                          "<br>Date: ", Date2, 
+                          "<extra></extra>")) %>% 
       layout(
         title = "Incidents by Location, Hour, and Type",
         xaxis = list(title = "Hour of Day", tickangle = 45),
