@@ -378,12 +378,12 @@ server <- function(input, output, session) {
     table_data <- data() %>%
       select(Location_Standard, Date2, parsed_categories) %>% 
       group_by(parsed_categories) %>%
-      summarise(count = n(), .groups = "drop") %>%
+      summarise(Count = n(), .groups = "drop") %>%
       mutate(
-        percentage = paste0(round((count / sum(count)) * 100, 1), "%")
+        Percentage = paste0(round((Count / sum(Count)) * 100, 1), "%")
       ) %>%
-      rename(categories = parsed_categories) %>% 
-      arrange(desc(count))
+      rename(Categories = parsed_categories) %>% 
+      arrange(desc(Count))
     
     # Then apply the formatting
     datatable(table_data,
@@ -395,8 +395,8 @@ server <- function(input, output, session) {
               ),
               extensions = 'Buttons',
               rownames = FALSE) %>%
-      formatStyle('count',
-                  background = styleColorBar(c(0, max(table_data$count)), 'lightblue'),
+      formatStyle('Count',
+                  background = styleColorBar(c(0, max(table_data$Count)), 'lightblue'),
                   backgroundSize = '100% 90%',
                   backgroundRepeat = 'no-repeat',
                   backgroundPosition = 'center')
