@@ -145,12 +145,14 @@ ui <- dashboardPage(
         title = "MyPC",
         width = 4,
         height = "100%", 
+        # p("Unique public PC users per hour"),
         plotlyOutput("plot_MyPC")
       ),
       box(
         title = "Ratio Table",
         width = 8,
         height = "100%", 
+        p("The ratio summary data represents number of infractions per 1000 computer users."),
         DTOutput("summary_ratio_table")
       )
     ),
@@ -164,7 +166,7 @@ ui <- dashboardPage(
       ),
 
       box(
-        title = "Types of incidents",
+        title = "Types of Incidents",
         width = 4,
         height = "100%", 
         DTOutput("table_data")
@@ -258,9 +260,9 @@ server <- function(input, output, session) {
   output$summary_ratio_table <- renderDT({
     summary_table_data() %>% 
       rename("Location" = "Location_Standard",
-             "Total Users" = "Total_Users",
+             "Total PC Users" = "Total_Users",
              "Total Infractions" = "Total_Infractions",
-             "Avg Daily Users" = "Average_Daily_Users",
+             "Avg Daily PC Users" = "Average_Daily_Users",
              "Avg Daily Infractions" = "Average_Daily_Infractions",
              "Infractions per 1,000 Users" = "Infractions_Per_1000_Users") %>%
     datatable(
