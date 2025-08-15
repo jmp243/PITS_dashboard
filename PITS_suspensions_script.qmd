@@ -1,0 +1,723 @@
+---
+title: "PITS_quarto"
+format: html
+editor: visual
+---
+
+last updated 8/15/2025 
+# Navigating Data in Public Libraries: Challenges & Opportunities \## Running Code
+
+### load libraries
+```{r}
+# load libraries 
+library(plotly)
+library(tidyverse)
+library(readr)
+library(crosstalk)
+library(lubridate)
+
+library(dplyr)
+library(tidyr)
+```
+
+## Read in PITS data
+
+```{r}
+# read in data
+PITS_ListIncidents_2023 <- read_csv("~/data librarian/PITS_Data/new_PITS_ListIncidents_2023.csv")
+PITS_ListIncidents_2023$`Incident ID` <- as.character(PITS_ListIncidents_2023$`Incident ID`)
+PITS_ListIncidents_2023$Time <- as.character(PITS_ListIncidents_2023$Time)
+
+PITS_ListIncidents_2024 <- read_csv("~/data librarian/PITS_Data/new_PITS_ListIncidents_2024.csv")
+
+PITS_ListIncidents_2024 <- PITS_ListIncidents_2024[,-(19:23)] 
+
+PITS_ListIncidents_2025 <- read_csv("~/data librarian/PITS_Data/new_PITS_ListIncidents_Jan-Jul16_2025.csv")
+PITS_ListIncidents_2025$Time <- as.character(PITS_ListIncidents_2025$Time)
+
+# merge the years
+PITS_2023_2025 <- rbind(PITS_ListIncidents_2023, PITS_ListIncidents_2024, PITS_ListIncidents_2025)
+
+```
+```{r}
+# read in suspension data
+PITS_susp <- read_csv("~/data librarian/PITS_Data/PITS_ListSuspensions2023_july18_2025.csv")
+PITS_susp <- PITS_susp %>% 
+  select(-`Person Name`)
+PITS_susp$`Incident ID` <- as.character(PITS_susp$`Incident ID`)
+
+# left join suspensions to incidents
+PITS_2023_2025 <- PITS_2023_2025 %>% left_join(PITS_susp)
+```
+
+
+```{r}
+# Turn follow-up into a binary 
+# none versus other text
+PITS_2023_2025 <- PITS_2023_2025 %>% 
+  mutate(Followup_binary = ifelse(Followup == "NONE", 0, 1))
+
+```
+
+```{r}
+# save a copy of the data without discerning columns
+PITS_2023_2025_public <- 
+  PITS_2023_2025 %>%
+  select(-Followup, -Description)
+
+```
+
+## Add datetime PITS data
+
+```{r}
+#| echo: false
+# change date 
+PITS_2023_2025_public$Date2 <- as.Date(PITS_2023_2025_public$Date, format = "%m/%d/%Y")
+```
+
+
+The `echo: false` option disables the printing of code (only output is displayed). \## Standardize Location format
+# read in MyPC data
+```{r}
+MyPC_2023 <- read_csv("~/data librarian/MyPC_data/MyPC_2023_siteAndLocationUsage.csv", 
+                      skip = 15)
+MyPC_2024 <- read_csv("~/data librarian/MyPC_data/MyPC_2024_siteAndLocationUsage.csv", 
+                      skip = 15)
+MyPC_2025 <- read_csv("~/data librarian/MyPC_data/MyPC_May2_2025_siteAndLocationUsage.csv", 
+                      skip = 15)
+MyPC_all <- rbind(MyPC_2023, MyPC_2024, MyPC_2025)
+
+# View(MyPC_2023)
+```
+Loaded in MyPC and Pits data
+
+Aggregated MyPC data
+
+```{r}
+# drop all test cases from MyPC
+MyPC_public <- MyPC_all %>% 
+  filter(Site != "Test") %>% 
+  select(-Name)
+```
+
+Convert id into character
+```{r}
+MyPC_public$`Login ID` <- as.character(MyPC_public$`Login ID`)
+```
+
+# create a new column to parse out the date for MyPC data
+```{r}
+library(lubridate)
+
+# Create new date variable with lubridate
+MyPC_public <- MyPC_public %>%
+  mutate(booking_from = mdy_hm(`Booking From`))
+
+MyPC_public <- MyPC_public %>%
+  mutate(booking_date = as.Date(`Booking From`, format = "%m/%d/%Y"))
+
+
+MyPC_public <- MyPC_public %>%
+ mutate(booking_time = format(booking_from, format = "%H:%M:%S"))
+```
+
+
+# standardize location name
+```{r}
+# match location standard for computer use
+# location name consistency 
+# Create a master location mapping table
+location_mapping <- data.frame(
+  standard_name = c(
+    "Joel D. Valdez-Main", "Himmel Park", "Murphy-Wilmot", "Woods Memorial",
+    "Valencia", "Martha Cooper", "Flowing Wells", "Sahuarita",
+    "Wheeler Taft Abbett", "Miller-Golf Links", "Eckstrom-Columbus",
+    "Santa Rosa", "Sam Lena-South Tucson", "Oro Valley", "Quincie Douglas",
+    "Bookmobile/Readrunners", "Caviglia-Arivaca", "Dewhirst-Catalina", 
+    "Dusenberry-River", "El Rio", "Frank De La Cruz-El Pueblo",
+    "Joyner-Green Valley", "Kirk-Bear Canyon", "Nanini", 
+    "Richard Elias-Mission", "Salazar-Ajo", "Southwest",
+    "W. Anne Gibson-Esmond Station", "Web Renewal"
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Function to standardize location names
+standardize_location <- function(location) {
+  # Remove common suffixes
+  location <- gsub(" Branch Library$|\\s+Library$", "", location)
+  
+  # Handle specific cases
+  location <- gsub("^Joel Valdez Main$", "Joel D. Valdez-Main", location)
+  location <- gsub("^Joel D Valdez Main$", "Joel D. Valdez-Main", location)
+  location <- gsub("^Bookmobile-Readrunners$", "Bookmobile/Readrunners", location)
+  location <- gsub("^Quincie Douglas$", "Quincie Douglas", location)
+  location <- gsub("^Virtual Library$", "Web Renewal", location)
+  location <- gsub("_default$", "Web Renewal", location)
+  # Return the standardized name
+  return(location)
+}
+
+# Apply standardization to each dataset
+standardize_dataset <- function(df, location_col_name) {
+  if(location_col_name %in% colnames(df)) {
+    df$Location_Standard <- standardize_location(df[[location_col_name]])
+    return(df)
+  } else {
+    warning(paste("Column", location_col_name, "not found in dataset"))
+    return(df)
+  }
+}
+
+# Apply to datasets
+PITS_2023_2025_public <- standardize_dataset(PITS_2023_2025_public, "Location")
+MyPC_public <- standardize_dataset(MyPC_public, "Site")
+
+```
+
+
+```{r}
+# make tables similar to pits
+library(plotly)
+library(dplyr)
+library(crosstalk)
+library(lubridate)
+library(htmltools)
+# First, prepare the data
+MyPC_public <- MyPC_public %>%
+  mutate(
+    # # Make sure booking_from is properly parsed
+    # booking_from = if(!inherits(`Booking From`, "POSIXct")) 
+    #                  as.POSIXct(`Booking From`) else `Booking From`,
+    # Extract hour for grouping
+    hour_of_day = hour(booking_from),
+    hour_label = paste0(hour_of_day, ":00")
+  )
+
+# Aggregate data by hour and location
+hourly_usage <- MyPC_public %>%
+  group_by(hour_label, Location_Standard, booking_date) %>%
+  summarize(count = n(), .groups = "drop") %>%
+  arrange(as.numeric(substr(hour_label, 1, 2)))
+
+```
+
+# mask names of the branches
+
+```{r}
+# Step 1: First standardize location names in both datasets (which you've already done)
+# PITS_2023_2025_public <- standardize_dataset(PITS_2023_2025_public, "Location")
+# MyPC_public <- standardize_dataset(MyPC_public, "Location")
+
+# Step 2: Combine all standardized location names from both datasets
+all_standardized_locations <- unique(c(
+  PITS_2023_2025_public$Location_Standard,
+  MyPC_public$Location_Standard
+))
+
+# Step 3: Create a single mapping for all locations
+generate_consistent_ids <- function(location_names, prefix = "Branch") {
+  unique_names <- unique(location_names)
+  # Sort names alphabetically to ensure consistent ordering regardless of which dataset is processed first
+  unique_names <- sort(unique_names)
+  masked_ids <- paste0(prefix, "_", sprintf("%02d", seq_along(unique_names)))
+  
+  # Create a named vector for easy lookup
+  id_mapping <- setNames(masked_ids, unique_names)
+  
+  return(id_mapping)
+}
+
+# Create ONE master mapping using all locations from both datasets
+master_location_mapping <- generate_consistent_ids(all_standardized_locations)
+
+# Step 4: Apply this single mapping to both datasets
+PITS_2023_2025_public$Location_masked <- master_location_mapping[PITS_2023_2025_public$Location_Standard]
+MyPC_public$Location_masked <- master_location_mapping[MyPC_public$Location_Standard]
+
+# Step 5: Create a lookup table for reference
+lookup_table_branch <- data.frame(
+  original_name = names(master_location_mapping),
+  Location_masked = unname(master_location_mapping)
+) %>% arrange(Location_masked)
+
+# Optional: Check that the same locations have the same masked IDs
+validation_check <- full_join(
+  PITS_2023_2025_public %>% select(Location_Standard, PITS_masked = Location_masked) %>% distinct(),
+  MyPC_public %>% select(Location_Standard, MyPC_masked = Location_masked) %>% distinct(),
+  by = "Location_Standard"
+)
+
+# Print any discrepancies (should be none if working correctly)
+discrepancies <- validation_check %>% 
+  filter(PITS_masked != MyPC_masked) %>%
+  filter(!is.na(PITS_masked) & !is.na(MyPC_masked))
+if(nrow(discrepancies) > 0) {
+  print("WARNING: Found inconsistent masking:")
+  print(discrepancies)
+} else {
+  print("Validation successful: Consistent masking across datasets")
+}
+
+```
+# Clean up the Time format in PITS
+```{r}
+# Using rowwise() to parse time
+
+PITS_2023_2025_public <- PITS_2023_2025_public %>%
+  rowwise() %>%
+  mutate(
+    # Process one row at a time
+    time_parsed = {
+      time_str <- Time
+      if (is.na(time_str) || !is.character(time_str)) {
+        NA
+      } else if (grepl("AM|PM", time_str, ignore.case = TRUE)) {
+        parse_date_time(time_str, orders = c("I:M p", "H:M p"))
+      } else if (grepl(":", time_str, fixed = TRUE)) {
+        if (length(gregexpr(":", time_str)[[1]]) == 2) {
+          parse_date_time(time_str, orders = "H:M:S")
+        } else {
+          parse_date_time(time_str, orders = "H:M")
+        }
+      } else {
+        NA
+      }
+    }
+  ) %>%
+  ungroup() %>%
+  mutate(
+    time_24h = format(time_parsed, "%H:%M:%S"),
+    time_12h = format(time_parsed, "%I:%M:%S %p")
+  )
+
+```
+
+# hourly summary of PITS 
+```{r}
+# group pits incidents by the hour
+
+# Assuming your data is in a data frame called 'df' with a column 'timestamp'
+# Group by hour
+PITS_2023_2025_public$hour_group <- floor_date(PITS_2023_2025_public$time_parsed, 
+                                               unit = "hour")
+
+# For visualization/labeling, you can format the hour
+# PITS_2023_2025_public$hour_label <- format(PITS_2023_2025_public$hour_group, "%H:00-%H:59")
+
+PITS_2023_2025_public$hour_label <- format(PITS_2023_2025_public$hour_group, "%H:00")
+
+```
+
+# remove NA dates
+```{r}
+# remove NA dates
+PITS_2023_2025_public <- PITS_2023_2025_public %>% 
+  filter(!is.na(Date))
+```
+
+
+## hourly location summary
+
+```{r}
+
+library(dplyr)
+library(tidyr)
+
+hourly_location_summary <- PITS_2023_2025_public %>%
+  # Select only necessary columns
+  select(hour_label, Location_Standard, Date2) %>%
+  # Pre-aggregate to reduce data size before pivoting
+  count(Date2, hour_label, Location_Standard, name = "count") %>%
+  # Now pivot with the smaller dataset
+  pivot_wider(
+    id_cols = c(Date2, hour_label),
+    names_from = Location_Standard,
+    values_from = count,
+    values_fill = 0
+  ) %>%
+  # Ensure all NA values are replaced with 0
+  filter(hour_label!= 0)
+
+# Check if NA values are removed
+sum(is.na(hourly_location_summary))  # Should return 0
+
+```
+# convert hourly to long format
+```{r}
+library(plotly)
+library(dplyr)
+library(crosstalk)
+library(tidyr)
+
+# Convert hourly_location_summary to long format if needed
+hourly_loc_long <- hourly_location_summary %>%
+  pivot_longer(
+    cols = -c(Date2, hour_label),
+    names_to = "Location",
+    values_to = "Count"
+  )
+
+# Make sure Date2 is a proper Date object
+hourly_loc_long$Date2 <- as.Date(hourly_loc_long$Date2)
+
+# Filter out NA values
+hourly_loc_long2 <- hourly_loc_long %>%
+  filter(!is.na(hour_label))
+```
+
+
+```{r}
+library(plotly)
+library(dplyr)
+library(crosstalk)
+library(tidyr)
+
+colnames(hourly_location_summary) <- trimws(colnames(hourly_location_summary))
+
+hourly_loc_long <- hourly_location_summary %>%
+  pivot_longer(
+    cols = -c(Date2, hour_label),
+    names_to = "Location",
+    values_to = "Count"
+  )
+```
+
+# parsing categories
+# less aggressive parsing that works better
+
+```{r}
+# 
+PITS_categories <- PITS_2023_2025_public %>%
+  # Create row ID for later joining
+  mutate(row_id = row_number()) %>%
+  # Process the categories column as before
+  mutate(categories = str_replace_all(`Infraction Categories`, "[,~]", ",")) %>%
+  # Split by comma
+  # separate_rows(categories, sep = ",") %>%
+  # Clean up each value
+  # mutate(categories = str_trim(`Infraction Categories`)) %>%
+  mutate(categories = str_replace_all(categories, "[~,]", ",")) %>%
+  mutate(categories = str_replace_all(categories, "^\\s*\\d+(\\.\\d+)*\\s+", "|")) %>%
+
+  mutate(categories = case_when(
+    categories == "null" ~ "Other",
+    categories == "null,null" ~ "Other",
+    categories == "null~null" ~ "Other",
+    categories == "" ~ "Other",
+    str_detect(categories, "^#+$") ~ "Other",
+    TRUE ~ categories
+  )) %>%
+  # Replace "or Illegal Conduct" with "Illegal Conduct"
+  # mutate(categories = ifelse(categories == "or Illegal Conduct", "Illegal Conduct", categories)) %>%
+  # Remove "or" and "and" if they appear as standalone words
+  # mutate(categories = str_replace(categories, "^(or|and)$", "")) %>%
+  # Remove empty strings, null values, and categories with hash symbols
+  filter(categories != "") %>%
+  filter(categories != "null") %>%
+  filter(!str_detect(categories, "#"))
+
+```
+
+## attempt to parse categories with comma separator
+
+```{r}
+# Function to properly parse categories with comma handling
+parse_categories <- function(categories_string) {
+  if (is.na(categories_string) || categories_string == "") {
+    return(character(0))
+  }
+  
+  # Replace commas followed by spaces with a temporary delimiter
+  # This preserves phrases like "Dangerous, Threatening, or Illegal Conduct"
+  temp_string <- gsub(", ", "<<COMMA_SPACE>>", categories_string)
+  
+  # Split by remaining commas (those without spaces after them)
+  split_categories <- strsplit(temp_string, ",")[[1]]
+  
+  # Restore the original comma-space combinations
+  result <- gsub("<<COMMA_SPACE>>", ", ", split_categories)
+  
+  # Trim any whitespace
+  result <- trimws(result)
+  
+  return(result)
+}
+
+# Example usage
+example_categories <- c(
+  "Dangerous, Threatening, or Illegal Conduct,Disruptive Personal Behavior,Use and preservation of library materials and property",
+  "Children in the Library,Incident Impact Level - Staff Traumatic Stress",
+  "Dangerous, Threatening, or Illegal Conduct,Disruptive,Personal Behavior",
+  NA,
+  ""
+)
+
+# Apply the function to each example
+results <- lapply(example_categories, parse_categories)
+
+# Display the results
+for (i in seq_along(example_categories)) {
+  if (!is.na(example_categories[i]) && example_categories[i] != "") {
+    cat("Original:", example_categories[i], "\n")
+    cat("Parsed:", paste(results[[i]], collapse = " | "), "\n\n")
+  } else {
+    cat("Original:", example_categories[i], "(empty or NA)\n")
+    cat("Parsed:", length(results[[i]]), "items\n\n")
+  }
+}
+
+# To use with a dataframe:
+PITS_categories2 <- PITS_categories %>%
+  mutate(parsed_categories = lapply(categories, parse_categories)) %>%
+  unnest(parsed_categories)
+```
+
+
+```{r}
+# pits summary
+PITS_summary <- PITS_categories2 %>%
+  group_by(parsed_categories) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(parsed_categories, desc(count))
+
+print(PITS_summary)
+```
+
+# parse empty categories
+
+```{r}
+# Filter for rows where Infraction Categories is empty, null, or contains #
+PITS_empty_categories <- PITS_2023_2025_public %>% 
+  filter(`Infraction Categories` == "" | 
+         `Infraction Categories` == "null" | 
+         str_detect(`Infraction Categories`, "#") |
+         is.na(`Infraction Categories`))
+
+PITS_empty_categories <- PITS_empty_categories %>%
+  # Create row ID for later joining
+  mutate(row_id = row_number()) %>%
+  # Create a new column that takes values from Infractions when Infraction Categories is problematic
+  mutate(category_source = case_when(
+    is.na(`Infraction Categories`) | `Infraction Categories` == "null" |
+    str_detect(`Infraction Categories`, "#") ~ `Infractions`,
+    TRUE ~ `Infraction Categories`
+  )) %>%
+  mutate(category_source = str_replace_all(category_source, "^\\s*\\d+(\\.\\d+)*\\s+", "|")) %>%
+   mutate(category_source = iconv(category_source, "UTF-8", "ASCII", sub="")) %>%
+  # Simply rename null and hash values to "Other" in the category_source column
+  mutate(category_source = case_when(
+    category_source == "null" ~ "Other",
+    category_source == "null~null" ~ "Other",
+    str_detect(category_source, "^#+$") ~ "Other",
+    TRUE ~ category_source
+  ))
+
+# rename 
+PITS_empty_categories <- PITS_empty_categories %>% 
+        mutate(category_source = case_when(
+        category_source == "Medical 911Called 911 for medical" ~ "Medical 911",
+        TRUE ~ category_source
+  ))
+```
+
+# parsing and pivoting wider for empty categories
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(stringr)
+library(tidyr)
+
+# Define the specific categories we want to extract
+target_categories <- c(
+  "Children in the Library",
+  "Dangerous, Threatening, or Illegal Conduct",
+  "Disruptive Personal Behavior",
+  "Incident Impact Level - Staff Traumatic Stress",
+  "Medical 911",
+  "Other",
+  "No Infractions Set",
+  "Use and preservation of library materials and property"
+)
+
+# Check if PITS_empty_categories exists and has the expected columns
+if(!exists("PITS_empty_categories") || !"category_source" %in% colnames(PITS_empty_categories)) {
+  stop("PITS_empty_categories dataframe not found or missing category_source column")
+}
+
+# Check if incident_id exists, if not create a row number as ID
+if(!"incident_id" %in% colnames(PITS_empty_categories)) {
+  PITS_empty_categories <- PITS_empty_categories %>%
+    mutate(row_id = row_number())
+  message("Created incident_id column using row numbers")
+}
+
+# Create a new column that contains the matching category if it exists
+result_df <- PITS_empty_categories %>%
+  mutate(extracted_category = case_when(
+    str_detect(category_source, fixed("Children in the Library")) ~ "Children in the Library",
+    str_detect(category_source, fixed("Dangerous, Threatening, or Illegal Conduct")) ~ "Dangerous, Threatening, or Illegal Conduct",
+    str_detect(category_source, "Disorderly conduct, fighting, violence, threatening, intimidating") ~ "Dangerous, Threatening, or Illegal Conduct",
+    str_detect(category_source, fixed("Disruptive Personal Behavior")) ~ "Disruptive Personal Behavior",
+    str_detect(category_source, fixed("Incident Impact Level - Staff Traumatic Stress")) ~ "Incident Impact Level - Staff Traumatic Stress",
+    str_detect(category_source, fixed("Medical 911")) ~ "Medical 911",
+    str_detect(category_source, fixed("Other")) ~ "Other",
+    str_detect(category_source, fixed("No Infractions Set")) ~ "No Infractions Set",
+    str_detect(category_source, fixed("Use and preservation of library materials and property")) ~ "Use and preservation of library materials and property",
+    TRUE ~ NA_character_
+  ))
+
+# Check if any categories were extracted
+if(sum(!is.na(result_df$extracted_category)) == 0) {
+  # Print some sample values to help diagnose the issue
+  cat("No categories were matched. Here are some sample values from category_source:\n")
+  print(head(PITS_empty_categories$category_source, 10))
+  stop("No categories were extracted - check if the strings match exactly")
+}
+
+# Create the wide format
+result_wide <- result_df %>%
+  filter(!is.na(extracted_category)) %>%
+  mutate(present = 1) %>%  # Create a value column
+  pivot_wider(
+    id_cols = row_id,
+    names_from = extracted_category,
+    values_from = present,
+    values_fill = 0
+  )
+
+# Check if the pivot_wider worked
+if(ncol(result_wide) <= 1) {
+  stop("pivot_wider resulted in only ID column - check if extracted_category has any values")
+}
+
+# Print summary to confirm it worked
+cat("Successfully extracted categories. Results summary:\n")
+print(summary(result_wide))
+
+# Return the result
+result_wide
+
+```
+
+# rename pits empty categories
+
+```{r}
+result_df <- result_df %>% 
+  rename(categories = category_source) %>% 
+  rename(parsed_categories = extracted_category) 
+
+
+PITS_public <- rbind(result_df, PITS_categories2) %>% 
+  select(-row_id) 
+
+```
+
+# calculate suspension duration
+```{r}
+# Convert start date and end date as dates
+PITS_public$`Start Date` <- as.Date(PITS_public$`Start Date`, format = "%m/%d/%Y")
+PITS_public$`End Date` <- as.Date(PITS_public$`End Date`, format = "%m/%d/%Y")
+
+# create a column that calculates duration by day
+# Calculate duration with error handling
+PITS_public <- PITS_public %>%
+  mutate(Suspension_length = case_when(
+    is.na(`End Date`) | is.na(`Start Date`) ~ NA_real_,
+    `End Date` < `Start Date` ~ NA_real_,  # Flag potential data errors
+    TRUE ~ as.numeric(`End Date` - `Start Date`)
+  )) %>% 
+  mutate(susp_binary = ifelse(`Suspension Status` == "NONE", 0, 1))
+
+# Optionally, count instances of potential data errors
+error_count <- sum(PITS_public$`End Date` < PITS_public$`Start Date`, na.rm = TRUE)
+if(error_count > 0) {
+  warning(paste("Found", error_count, "records where End Date is before Start Date"))
+}
+
+```
+
+## drop old category for PITS_public
+```{r}
+PITS_public2 <- PITS_public %>% 
+  select(c(-categories, -Location, -`Person Name`)) %>% 
+  rename(Susp_Start_date = `Start Date`) %>% 
+  rename(Susp_End_date = `End Date`)
+```
+
+```{r}
+# develop a way to view suspensions
+followup_public <- PITS_public2 %>% 
+  filter(Followup_binary == 1) %>% 
+  unique()
+
+suspension_public <- PITS_public2 %>% 
+  filter(susp_binary ==1) %>% 
+  unique()
+
+susp_but_no_followup <- anti_join(followup_public, suspension_public)
+# followup_but_no_susp <- anti_join(suspension_public, followup_public) 
+# is 0
+```
+# table for suspensions
+
+```{r}
+# Need to install plotly from Github to get funnel plots
+# devtools::install_github("ropensci/plotly")
+library(plotly)
+library(dplyr)
+library(kableExtra)
+
+library(ggpubr)
+# Compute summary with percentages
+PITS_public_susp_days <- PITS_public2 %>%
+  filter(susp_binary ==1) %>% 
+  group_by(Location_masked) %>%
+  summarise(susp_count = n(), 
+            avg_suspension_days = round(mean(Suspension_length, na.rm = TRUE), 1), .groups = "drop")
+
+PITS_public_susp_days
+```
+
+# suspension length by location
+```{r}
+# Compute summary with percentages
+PITS_public_susp <- PITS_public2 %>%
+  group_by(Location_masked, `Incident ID`, Suspension_length) %>%
+  summarise(count = n(), .groups = "drop")
+PITS_public_susp
+```
+
+
+```{r}
+# From making a table
+library(ggplot2)
+
+# Ensure branch_masked is a factor
+# followup_public$branch_masked <- as.factor(followup_public$branch_masked)
+
+ggplot(PITS_public_susp, aes(x = Location_masked, y = Suspension_length, fill = Location_masked)) +
+  geom_violin(trim = FALSE, color = "black") +        # Full violin shape with border
+  geom_boxplot(width = 0.1, fill = "white", alpha = 0.7) +  # Optional: overlay boxplot
+  stat_summary(fun = median, geom = "point", size = 2, color = "red") +  # Add median points
+  labs(
+    title = "Distribution of Suspension Length by Branch",
+    x = "Branch",
+    y = "Suspension Length"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+
+# write CSV
+```{r}
+# preprocessed data for shiny
+write.csv(PITS_public2, "~/data librarian/PITS_Data/pits_reports_analysis/processed_data/PITS_public2.csv")
+
+write.csv(MyPC_public, "~/data librarian/PITS_Data/pits_reports_analysis/processed_data/MyPC_public.csv")
+```
+
+
