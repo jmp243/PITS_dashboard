@@ -1,8 +1,3 @@
----
-editor_options: 
-  markdown: 
-    wrap: 72
----
 
 # PITS_dashboard
 
@@ -47,3 +42,4 @@ Data formats, such as YYYY/MM/DD Calculations Versioning: Establish a
 procedure for documenting changes in files. One option is to create a
 changelog in this README file, where every step that will change the
 output files is listed.
+
