@@ -12,8 +12,8 @@ mid-sized county library system.
 
 the descriptions are all in English.
 
-The Tabs_UI.R is the most up to date file for the shiny app using hidden
-branch names.
+The Tabs_UI.R is the most up to date file for the shiny app. 
+PITS_suspensions_script.qmd is the latest iteration of data wrangling. 
 
 Title of dataset
 
@@ -42,4 +42,50 @@ Data formats, such as YYYY/MM/DD Calculations Versioning: Establish a
 procedure for documenting changes in files. One option is to create a
 changelog in this README file, where every step that will change the
 output files is listed.
+
+DATA COLLECTION 
+## how to pull data
+
+### from PITS dashboard
+
+only some categories, 
+
+got to report 
+
+Menu>reports> list reports> incidents
+
+- remove PERPETRATOR and REPORTER
+- check all the other boxes
+- change date scope if necessary> Done
+- run report
+- export to excel
+
+save as csv in this format - new_PITS_ListIncidents_Jan-Jun24_2025.csv
+
+**Suspension**
+
+remove perpetrator name
+
+add suspension note
+
+Menu> reports> list of suspensions > check Suspension Note> set date> run report
+
+export to EXCEL
+
+renAME in this format - PITS_ListSuspensions2023_june24_2025.csv 
+
+save as csv
+
+### from MyPC
+
+
+login quistaff
+
+reports> utilisation reports> **Site and Location Usage Report>**
+
+report view > detailed csv
+
+- change date if necessary> specific> change scope> View Report
+- do it for one year at a time
+- name in this format MyPC_Jun24_2025_siteAndLocationUsage
 
