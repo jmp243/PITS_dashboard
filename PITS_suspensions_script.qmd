@@ -4,10 +4,10 @@ format: html
 editor: visual
 ---
 
-last updated 12/6/2025 
-# Navigating Data in Public Libraries: Challenges & Opportunities \## Running Code
+last updated 12/6/2025 \# Navigating Data in Public Libraries: Challenges & Opportunities \## Running Code
 
 ### load libraries
+
 ```{r}
 # load libraries 
 library(plotly)
@@ -15,7 +15,6 @@ library(tidyverse)
 library(readr)
 library(crosstalk)
 library(lubridate)
-
 library(dplyr)
 library(tidyr)
 ```
@@ -24,15 +23,15 @@ library(tidyr)
 
 ```{r}
 # read in data
-PITS_ListIncidents_2023 <- read_csv("~/data librarian/PITS_Data/new_PITS_ListIncidents_2023.csv")
+PITS_ListIncidents_2023 <- read_csv("PITS_Data/new_PITS_ListIncidents_2023.csv")
 PITS_ListIncidents_2023$`Incident ID` <- as.character(PITS_ListIncidents_2023$`Incident ID`)
 PITS_ListIncidents_2023$Time <- as.character(PITS_ListIncidents_2023$Time)
 
-PITS_ListIncidents_2024 <- read_csv("~/data librarian/PITS_Data/new_PITS_ListIncidents_2024.csv")
+PITS_ListIncidents_2024 <- read_csv("PITS_Data/new_PITS_ListIncidents_2024.csv")
 
 PITS_ListIncidents_2024 <- PITS_ListIncidents_2024[,-(19:23)] 
 
-PITS_ListIncidents_2025 <- read_csv("~/data librarian/PITS_Data/new_PITS_ListIncidents_Jan-Dec23_2025.csv")
+PITS_ListIncidents_2025 <- read_csv("PITS_Data/new_PITS_ListIncidents_Jan-Dec23_2025.csv")
 PITS_ListIncidents_2025$Time <- as.character(PITS_ListIncidents_2025$Time)
 PITS_ListIncidents_2025$`Incident ID` <- as.character(PITS_ListIncidents_2025$`Incident ID`)
 
@@ -43,7 +42,7 @@ PITS_2023_2025 <- rbind(PITS_ListIncidents_2023, PITS_ListIncidents_2024, PITS_L
 
 ```{r}
 # read in suspension data
-PITS_susp <- read_csv("~/data librarian/PITS_Data/PITS_ListSuspensions2023_Dec23_2025.csv")
+PITS_susp <- read_csv("PITS_Data/PITS_ListSuspensions2023_Dec23_2025.csv")
 # PITS_susp <- PITS_susp %>% 
 #   select(-`Person Name`)
 PITS_susp$`Incident ID` <- as.character(PITS_susp$`Incident ID`)
@@ -51,7 +50,6 @@ PITS_susp$`Incident ID` <- as.character(PITS_susp$`Incident ID`)
 # left join suspensions to incidents
 PITS_2023_2025 <- PITS_2023_2025 %>% left_join(PITS_susp)
 ```
-
 
 ```{r}
 # Turn follow-up into a binary 
@@ -77,20 +75,20 @@ PITS_2023_2025_public <-
 PITS_2023_2025_public$Date2 <- as.Date(PITS_2023_2025_public$Date, format = "%m/%d/%Y")
 ```
 
+The `echo: false` option disables the printing of code (only output is displayed). \## Standardize Location format \# read in MyPC data
 
-The `echo: false` option disables the printing of code (only output is displayed). \## Standardize Location format
-# read in MyPC data
 ```{r}
-MyPC_2023 <- read_csv("~/data librarian/MyPC_data/MyPC_2023_siteAndLocationUsage.csv", 
+MyPC_2023 <- read_csv("MyPC_data/MyPC_2023_siteAndLocationUsage.csv", 
                       skip = 15)
-MyPC_2024 <- read_csv("~/data librarian/MyPC_data/MyPC_2024_siteAndLocationUsage.csv", 
+MyPC_2024 <- read_csv("MyPC_data/MyPC_2024_siteAndLocationUsage.csv", 
                       skip = 15)
-MyPC_2025 <- read_csv("~/data librarian/MyPC_data/MyPC_Dec23_2025_siteAndLocationUsage.csv", 
+MyPC_2025 <- read_csv("MyPC_data/MyPC_Dec23_2025_siteAndLocationUsage.csv", 
                       skip = 15)
 MyPC_all <- rbind(MyPC_2023, MyPC_2024, MyPC_2025)
 
 # View(MyPC_2023)
 ```
+
 Loaded in MyPC and Pits data
 
 Aggregated MyPC data
@@ -103,11 +101,13 @@ MyPC_public <- MyPC_all %>%
 ```
 
 Convert id into character
+
 ```{r}
 MyPC_public$`Login ID` <- as.character(MyPC_public$`Login ID`)
 ```
 
 # create a new column to parse out the date for MyPC data
+
 ```{r}
 library(lubridate)
 
@@ -123,8 +123,8 @@ MyPC_public <- MyPC_public %>%
  mutate(booking_time = format(booking_from, format = "%H:%M:%S"))
 ```
 
-
 # standardize location name
+
 ```{r}
 # match location standard for computer use
 # location name consistency 
@@ -262,7 +262,9 @@ if(nrow(discrepancies) > 0) {
 }
 
 ```
+
 # Clean up the Time format in PITS
+
 ```{r}
 # Using rowwise() to parse time
 
@@ -295,7 +297,8 @@ PITS_2023_2025_public <- PITS_2023_2025_public %>%
 
 ```
 
-# hourly summary of PITS 
+# hourly summary of PITS
+
 ```{r}
 # group pits incidents by the hour
 
@@ -312,12 +315,12 @@ PITS_2023_2025_public$hour_label <- format(PITS_2023_2025_public$hour_group, "%H
 ```
 
 # remove NA dates
+
 ```{r}
 # remove NA dates
 PITS_2023_2025_public <- PITS_2023_2025_public %>% 
   filter(!is.na(Date))
 ```
-
 
 ## hourly location summary
 
@@ -345,7 +348,9 @@ hourly_location_summary <- PITS_2023_2025_public %>%
 sum(is.na(hourly_location_summary))  # Should return 0
 
 ```
+
 # convert hourly to long format
+
 ```{r}
 library(plotly)
 library(dplyr)
@@ -368,7 +373,6 @@ hourly_loc_long2 <- hourly_loc_long %>%
   filter(!is.na(hour_label))
 ```
 
-
 ```{r}
 library(plotly)
 library(dplyr)
@@ -386,6 +390,7 @@ hourly_loc_long <- hourly_location_summary %>%
 ```
 
 # parsing categories
+
 # less aggressive parsing that works better
 
 ```{r}
@@ -474,7 +479,6 @@ PITS_categories2 <- PITS_categories %>%
   mutate(parsed_categories = lapply(categories, parse_categories)) %>%
   unnest(parsed_categories)
 ```
-
 
 ```{r}
 # pits summary
@@ -615,34 +619,56 @@ PITS_public <- rbind(result_df, PITS_categories2) %>%
   select(-row_id) 
 
 ```
-
-# calculate suspension duration
+write.csv(PITS_public1, "processed_data/PITS_public1.csv")
 ```{r}
 # Convert start date and end date as dates
 PITS_public$`Start Date` <- as.Date(PITS_public$`Start Date`, format = "%m/%d/%Y")
 PITS_public$`End Date` <- as.Date(PITS_public$`End Date`, format = "%m/%d/%Y")
 
+```
+
+# calculate suspension duration
+
+```{r}
+
 # create a column that calculates duration by day
 # Calculate duration with error handling
+# PITS_public <- PITS_public %>%
+#   mutate(Suspension_length = case_when(
+#     is.na(`End Date`) | is.na(`Start Date`) ~ NA_real_,
+#     `End Date` < `Start Date` ~ NA_real_,  # Flag potential data errors
+#     TRUE ~ as.numeric(`End Date` - `Start Date`)
+#   )) %>% 
+#   mutate(susp_binary = ifelse(`Suspension Status` == "NONE", 0, 1))
+# 
+# # # Optionally, count instances of potential data errors
+# error_count <- sum(PITS_public$`End Date` < PITS_public$`Start Date`, na.rm = TRUE)
+# if(error_count > 0) {
+#   warning(paste("Found", error_count, "records where End Date is before Start Date"))
+# }
+# 
+# # Filter out rows where EndDate is before StartDate
+# PITS_public <- PITS_public[PITS_public$`End Date` >= PITS_public$`Start Date`, ] # removed 4
+
 PITS_public <- PITS_public %>%
-  mutate(Suspension_length = case_when(
-    is.na(`End Date`) | is.na(`Start Date`) ~ NA_real_,
-    `End Date` < `Start Date` ~ NA_real_,  # Flag potential data errors
-    TRUE ~ as.numeric(`End Date` - `Start Date`)
-  )) %>% 
-  mutate(susp_binary = ifelse(`Suspension Status` == "NONE", 0, 1))
-
-# Optionally, count instances of potential data errors
-error_count <- sum(PITS_public$`End Date` < PITS_public$`Start Date`, na.rm = TRUE)
-if(error_count > 0) {
-  warning(paste("Found", error_count, "records where End Date is before Start Date"))
-}
-
-# Filter out rows where EndDate is before StartDate
-PITS_public <- PITS_public[PITS_public$`End Date` >= PITS_public$`Start Date`, ]
+  mutate(
+    # Convert string "NA" to real NA across both suspension columns
+    `Suspension Status` = na_if(`Suspension Status`, "NA"),
+    `Suspension Type`   = na_if(`Suspension Type`,   "NA"),
+    
+    Suspension_length = case_when(
+      is.na(`End Date`) | is.na(`Start Date`)  ~ NA_real_,
+      `End Date` < `Start Date`                ~ NA_real_,
+      TRUE ~ as.numeric(`End Date` - `Start Date`)
+    ),
+    
+    # 1 only when there is an actual suspension type present
+    susp_binary = ifelse(`Suspension Type` == "Suspended customer", 1, 0)
+  )
 ```
 
 ## drop old category for PITS_public
+
 ```{r}
 PITS_public2 <- PITS_public %>% 
   select(c(-categories, -Location)) %>% 
@@ -664,6 +690,7 @@ susp_but_no_followup <- anti_join(followup_public, suspension_public)
 # followup_but_no_susp <- anti_join(suspension_public, followup_public) 
 # is 0
 ```
+
 # table for suspensions
 
 ```{r}
@@ -685,6 +712,7 @@ PITS_public_susp_days
 ```
 
 # suspension length by location
+
 ```{r}
 # Compute summary with percentages
 PITS_public_susp <- PITS_public2 %>%
@@ -692,7 +720,6 @@ PITS_public_susp <- PITS_public2 %>%
   summarise(count = n(), .groups = "drop")
 PITS_public_susp
 ```
-
 
 ```{r}
 # From making a table
@@ -715,13 +742,11 @@ ggplot(PITS_public_susp, aes(x = Location_masked, y = Suspension_length, fill = 
 
 ```
 
-
 # write CSV
+
 ```{r}
 # preprocessed data for shiny
-write.csv(PITS_public2, "~/data librarian/PITS_Data/pits_reports_analysis/processed_data/PITS_public2.csv")
+write.csv(PITS_public2, "processed_data/PITS_public2.csv")
 
-write.csv(MyPC_public, "~/data librarian/PITS_Data/pits_reports_analysis/processed_data/MyPC_public.csv")
+write.csv(MyPC_public, "processed_data/MyPC_public.csv")
 ```
-
-
