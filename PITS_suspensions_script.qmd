@@ -677,18 +677,35 @@ PITS_public2 <- PITS_public %>%
 ```
 
 ```{r}
-# develop a way to view suspensions
-followup_public <- PITS_public2 %>% 
-  filter(Followup_binary == 1) %>% 
-  unique()
+followup_public <- PITS_public2 %>%
+  filter(Followup_binary == 1) %>%
+  distinct()
 
-suspension_public <- PITS_public2 %>% 
-  filter(susp_binary ==1) %>% 
-  unique()
+suspension_public <- PITS_public2 %>%
+  filter(susp_binary == 1) %>%
+  distinct()
 
-susp_but_no_followup <- anti_join(followup_public, suspension_public)
-# followup_but_no_susp <- anti_join(suspension_public, followup_public) 
-# is 0
+# Check how many susp_binary NAs exist — should be 0 after your mutate fix
+sum(is.na(PITS_public2$susp_binary))
+
+# Always specify the join key explicitly
+susp_but_no_followup <- anti_join(
+  followup_public, 
+  suspension_public, 
+  by = "Incident ID"
+)
+# # develop a way to view suspensions
+# followup_public <- PITS_public2 %>% 
+#   filter(Followup_binary == 1) %>% 
+#   unique()
+# 
+# suspension_public <- PITS_public2 %>% 
+#   filter(susp_binary ==1) %>% 
+#   unique()
+# 
+# susp_but_no_followup <- anti_join(followup_public, suspension_public)
+# # followup_but_no_susp <- anti_join(suspension_public, followup_public) 
+# # is 0
 ```
 
 # table for suspensions
