@@ -26,8 +26,10 @@ ggplot2::theme_set(ggplot2::theme_minimal())
 # Load data
 # =============================================================================
 
-PITS_public <- read_csv("processed_data/PITS_public2.csv") %>% select(-1)
-MyPC_public  <- read_csv("processed_data/MyPC_public.csv")  %>% select(-1)
+# PITS_public <- read_csv("processed_data/PITS_public2.csv") %>% select(-1)
+# MyPC_public  <- read_csv("processed_data/MyPC_public.csv")  %>% select(-1)
+PITS_public <- read_csv("processed_data/PITS_public_share.csv") %>% select(-1)
+MyPC_public  <- read_csv("processed_data/MyPC_public_share.csv")  %>% select(-1)
 
 # =============================================================================
 # Clean PITS
