@@ -1,0 +1,236 @@
+---
+title: "PITS_suspensions_analysis"
+format: html
+editor: visual
+---
+### read in libraries
+```{r}
+library(readr)
+library(tidyverse)
+```
+
+### read in data
+```{r}
+PITS_public <- read_csv("processed_data/PITS_public2.csv") %>% select(-1)
+PITS_public <- PITS_public %>% 
+  mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
+
+MyPC_public <- read_csv("processed_data/MyPC_public.csv") %>% select(-1) 
+MyPC_public <- MyPC_public %>% 
+  mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
+```
+
+hourly grouped usage
+```{r}
+hourly_usage <- MyPC_public %>%
+  group_by(Location_Standard, hour_label, booking_date) %>%
+  summarize(count = n(), .groups = "drop") %>% 
+  arrange(as.numeric(substr(hour_label, 1, 2)))
+# mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
+
+levels(hourly_usage$hour_label)
+```
+# streamlined ratio process #
+```{r}
+# for date, computer usage and any infractions
+PITS_counts <- PITS_public %>%
+  mutate(date = as.Date(Date2)) %>%
+  group_by(Location_masked, date) %>%
+  summarize(infraction_count = n(), .groups = "drop")
+
+# Aggregate MyPC data by location and date
+MyPC_counts <- MyPC_public %>%
+  rename(date = booking_date) %>%
+  group_by(Location_masked, date) %>%
+  summarize(user_count = n(), .groups = "drop")
+
+# Step 2: Join the datasets
+ratio_data <- MyPC_counts %>%
+  full_join(PITS_counts, by = c("Location_masked", "date")) %>%
+  mutate(
+    infraction_count = ifelse(is.na(infraction_count), 0, infraction_count),
+    user_count = ifelse(is.na(user_count), 0, user_count),
+    infraction_pct = round(
+  ifelse(user_count > 0, infraction_count / user_count * 100, NA_real_), 2)
+  ) 
+
+```
+
+# for suspensions
+```{r}
+# for date, computer usage and any infractions
+# Total incidents per location per day
+PITS_incident_counts <- PITS_public %>%
+  group_by(`Incident ID`, Location_masked, Date2) %>%
+  summarize(incident_count = n_distinct(`Incident ID`), .groups = "drop")
+
+# Total suspensions per location per day
+PITS_susp_counts <- PITS_public %>%
+  filter(susp_binary == 1) %>%
+  group_by(Location_masked, Date2) %>%
+  summarize(suspension_count = n_distinct(`Incident ID`), .groups = "drop")
+
+# Join and compute ratio — both already at Location_masked + Date2 grain
+susp_ratio_data <- PITS_incident_counts %>%
+  left_join(PITS_susp_counts, by = c("Location_masked", "Date2")) %>%
+  mutate(
+    suspension_count = ifelse(is.na(suspension_count), 0, suspension_count),
+    susp_ratio       = ifelse(incident_count > 0, 
+                              suspension_count / incident_count, 
+                              0)
+  #   suspension_pct = round(
+  # ifelse(incident_count > 0, suspension_count / incident_count * 100, NA_real_), 2)
+  )
+
+```
+
+looking at suspension length
+```{r}
+# One row per suspended incident — deduplicate before averaging
+PITS_susp_deduped <- PITS_public %>%
+  filter(susp_binary == 1, !is.na(Suspension_length), !is.na(`Incident ID`)) %>%
+  distinct(`Incident ID`, Location_masked, Date2, Suspension_length)
+
+# Average suspension length per location per day
+PITS_susp_avg <- PITS_susp_deduped %>%
+  group_by(Location_masked, Date2) %>%
+  summarize(
+    suspension_count  = n_distinct(`Incident ID`),
+    avg_susp_length   = mean(Suspension_length),
+    # median_susp_length = median(Suspension_length),
+    .groups = "drop"
+  )
+
+# Join back to incident counts for full picture
+susp_ratio_data <- PITS_incident_counts %>%        # from your previous step
+  left_join(PITS_susp_avg, by = c("Location_masked", "Date2")) %>%
+  mutate(
+    suspension_count   = ifelse(is.na(suspension_count), 0, suspension_count),
+    avg_susp_length    = ifelse(is.na(avg_susp_length), 0, avg_susp_length),
+    # median_susp_length = ifelse(is.na(median_susp_length), 0, median_susp_length),
+    susp_ratio         = ifelse(incident_count > 0,
+                                suspension_count / incident_count, 0)
+  )
+```
+
+```{r}
+PITS_incident_counts <- PITS_public %>%
+  group_by(Location_masked, Date2) %>%
+  summarize(incident_count = n_distinct(`Incident ID`), .groups = "drop")
+
+susp_ratio_data <- PITS_incident_counts %>%
+  left_join(PITS_susp_counts, by = c("Location_masked", "Date2")) %>%
+  mutate(
+    suspension_count = ifelse(is.na(suspension_count), 0, suspension_count),
+    susp_ratio       = round(ifelse(incident_count > 0, 
+                                    suspension_count / incident_count, NA_real_), 4),
+    susp_pct         = round(susp_ratio * 100, 4)
+  )
+
+```
+
+Graph 
+```{r}
+library(lubridate)
+library(ggplot2)
+
+monthly_susp <- PITS_public %>%
+  mutate(month = floor_date(as.Date(Date2), "month")) %>%
+  filter(month >= as.Date("2023-01-01"), month <= as.Date("2025-12-31")) %>%
+  group_by(month) %>%
+  summarize(
+    incident_count   = n_distinct(`Incident ID`),
+    suspension_count = sum(susp_binary == 1, na.rm = TRUE),
+    susp_pct         = round(suspension_count / incident_count * 100, 4),
+    .groups = "drop"
+  )
+
+
+# View the table
+print(monthly_susp)
+
+# Plot
+ggplot(monthly_susp, aes(x = month, y = susp_pct)) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  geom_point(color = "steelblue", size = 2) +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  scale_y_continuous(labels = scales::percent_format(scale = 1, accuracy = 0.01)) +
+  labs(
+    title = "Monthly % of Infractions Resulting in Suspension",
+    x = NULL, y = "Suspension Rate (%)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# ggplot(monthly_susp, aes(x = month, y = susp_pct)) +
+#   geom_line(color = "steelblue", linewidth = 1) +
+#   geom_point(color = "steelblue", size = 2) +
+#   scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+#   scale_y_continuous(labels = scales::percent_format(scale = 1, accuracy = 0.01)) +
+#   coord_cartesian(ylim = c(0, 100)) +  # Add this
+#   labs(
+#     title = "Monthly % of Infractions Resulting in Suspension",
+#     x = NULL, y = "Suspension Rate (%)"
+#   ) +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+yearly_susp <- PITS_public %>%
+  mutate(year = floor_date(as.Date(Date2), "year")) %>%
+  filter(year >= as.Date("2023-01-01"), year <= as.Date("2025-12-31")) %>%
+  group_by(year) %>%
+  summarize(
+    incident_count   = n_distinct(`Incident ID`),
+    suspension_count = sum(susp_binary == 1, na.rm = TRUE),
+    susp_pct         = round(suspension_count / incident_count * 100, 4),
+    .groups = "drop"
+  )
+yearly_susp
+```
+save reproducible copies of the datafiles
+```{r}
+names(MyPC_public)
+```
+drop site, location, resource, location_standard, location
+create a new login_id
+```{r}
+# Install and load the digest package
+if(!require(digest)) install.packages("digest")
+library(digest)
+
+# # Sample Data
+# df <- data.frame(
+#   original_id = c("user123", "user456", "user123", "user789"),
+#   data = c(10, 20, 15, 30)
+# )
+
+# Generate new_login_id using MD5 hash
+MyPC_public$new_login_id <- sapply(MyPC_public$`Login ID`, digest, algo="md5")
+
+```
+# Drop the original ID column
+# df$original_id <- NULL
+drop site, location, resource, location_standard, location, login id
+```{r}
+MyPC_public_share <- MyPC_public %>% 
+  select(-c(Location, Location_Standard, `Login ID`, Site, Resource))
+
+```
+
+```{r}
+names(PITS_public)
+```
+
+```{r}
+PITS_public_share <- PITS_public %>% 
+  select(-Location_Standard)
+```
+
+write csv
+```{r}
+write.csv(PITS_public_share, "processed_data/PITS_public_share.csv")
+
+write.csv(MyPC_public_share, "processed_data/MyPC_public_share.csv")
+```
+
