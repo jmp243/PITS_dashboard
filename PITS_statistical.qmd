@@ -1,0 +1,405 @@
+------------------------------------------------------------------------
+title: "PITS_statistical_tests" 
+format: html 
+editor: visual 
+---
+
+### read in libraries
+
+```{r}
+library(readr)
+library(tidyverse)
+library(broom)       # tidy model output
+library(MASS)        # glm.nb for negative binomial
+library(dunn.test)   # Dunn post-hoc after Kruskal-Wallis
+```
+
+### read in data
+```{r}
+PITS_public <- read_csv("processed_data/PITS_public_share.csv") 
+# %>% select(-1)
+MyPC_public  <- read_csv("processed_data/MyPC_public_share.csv") 
+# %>% select(-1)
+
+```
+
+# =============================================================================
+# Clean PITS
+# =============================================================================
+```{r}
+PITS_public <- PITS_public %>%
+  mutate(
+    # Convert string "NA" to real NA
+    `Suspension Status` = na_if(`Suspension Status`, "NA"),
+    `Suspension Type`   = na_if(`Suspension Type`,   "NA"),
+    Susp_Start_date     = na_if(as.character(Susp_Start_date), "NA"),
+    Susp_End_date       = na_if(as.character(Susp_End_date),   "NA"),
+    Susp_Start_date     = as.Date(Susp_Start_date),
+    Susp_End_date       = as.Date(Susp_End_date),
+    Date2               = as.Date(Date2),
+
+    Suspension_length = case_when(
+      is.na(Susp_End_date) | is.na(Susp_Start_date) ~ NA_real_,
+      Susp_End_date < Susp_Start_date               ~ NA_real_,
+      TRUE ~ as.numeric(Susp_End_date - Susp_Start_date)
+    ),
+
+    # Drive susp_binary off Suspension Type — avoids "NONE" miscount
+    susp_binary = ifelse(`Suspension Type` == "Suspended customer", 1L, 0L),
+    susp_binary = replace_na(susp_binary, 0L),
+
+    hour_label = fct_reorder(as.factor(hour_label), hour_label)
+  )
+PITS_public$PITS_weekday <- weekdays(PITS_public$Date2)
+
+```
+
+MyPC data
+```{r}
+MyPC_public <- MyPC_public %>%
+  mutate(
+    booking_date = as.Date(booking_date),
+    booking_from = as.Date(booking_from),
+    hour_label   = fct_reorder(as.factor(hour_label), hour_label)
+  )
+MyPC_public$MyPC_weekday <- weekdays(MyPC_public$booking_date)
+
+```
+
+
+# =============================================================================
+# Pre-compute ratio data (computer users vs incidents)
+# =============================================================================
+```{r}
+PITS_incident_counts <- PITS_public %>%
+  group_by(Location_masked, date = as.Date(Date2)) %>%
+  summarise(incident_count = n_distinct(`Incident ID`), .groups = "drop")
+
+MyPC_counts <- MyPC_public %>%
+  group_by(Location_masked, date = booking_date) %>%
+  summarise(user_count = n(), .groups = "drop")
+
+ratio_data <- MyPC_counts %>%
+  full_join(PITS_incident_counts, by = c("Location_masked", "date")) %>%
+  mutate(
+    user_count     = replace_na(user_count,     0),
+    incident_count = replace_na(incident_count, 0)
+  )
+
+```
+
+
+# =============================================================================
+# Pre-compute suspension ratio data (suspensions per incident + avg length)
+# =============================================================================
+```{r}
+
+# One row per unique suspended incident — prevents duration double-counting
+PITS_susp_deduped <- PITS_public %>%
+  filter(susp_binary == 1,
+         !is.na(`Incident ID`),
+         !is.na(Suspension_length)) %>%
+  distinct(`Incident ID`, Location_masked, Date2, Suspension_length)
+
+# Suspensions per location per day
+PITS_susp_counts <- PITS_susp_deduped %>%
+  group_by(Location_masked, date = as.Date(Date2)) %>%
+  summarise(
+    suspension_count   = n_distinct(`Incident ID`),
+    avg_susp_length    = mean(Suspension_length),
+    median_susp_length = median(Suspension_length),
+    .groups = "drop"
+  )
+
+susp_ratio_data <- PITS_incident_counts %>%
+  left_join(PITS_susp_counts, by = c("Location_masked", "date")) %>%
+  mutate(
+    suspension_count   = replace_na(suspension_count,   0),
+    avg_susp_length    = replace_na(avg_susp_length,    0),
+    median_susp_length = replace_na(median_susp_length, 0),
+    susp_ratio         = ifelse(incident_count > 0,
+                                suspension_count / incident_count, 0)
+  )
+
+```
+
+
+
+# =============================================================================
+# SECTION 1: Baseline — Suspensions as the dominant outcome
+# =============================================================================
+
+## Descriptive: suspension rate overall and by location
+```{r}
+suspension_summary <- PITS_public %>%
+  summarise(
+    total_incidents    = n_distinct(`Incident ID`),
+    total_suspensions  = sum(susp_binary, na.rm = TRUE),
+    suspension_rate    = mean(susp_binary, na.rm = TRUE)
+  )
+
+suspension_summary_by_loc <- PITS_public %>%
+  group_by(Location_masked) %>%
+  summarise(
+    total_incidents   = n_distinct(`Incident ID`),
+    total_suspensions = sum(susp_binary, na.rm = TRUE),
+    suspension_rate   = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(suspension_rate))
+
+print(suspension_summary)
+print(suspension_summary_by_loc)
+```
+
+## One-sample proportion test: Is suspension rate > 50%?
+```{r}
+# H0: true suspension rate = 0.50
+# H1: true suspension rate > 0.50
+binom_test <- binom.test(
+  x = suspension_summary$total_suspensions,
+  n = suspension_summary$total_incidents,
+  p = 0.50,
+  alternative = "greater"
+)
+print(binom_test)
+```
+
+## Support service use vs. suspension rate
+```{r}
+support_summary <- PITS_public %>%
+  summarise(
+    n                  = n(),
+    pct_suspended      = mean(susp_binary, na.rm = TRUE),
+    pct_guard_called   = mean(`Support:Called Guard?`         == "Yes", na.rm = TRUE),
+    pct_police_called  = mean(`Support:Called Police (911)?`  == "Yes", na.rm = TRUE),
+    pct_emt_called     = mean(`Support:Called EMT?`           == "Yes", na.rm = TRUE),
+    pct_crisis_called  = mean(`Support:Called crisis line?`   == "Yes", na.rm = TRUE)
+  ) %>%
+  pivot_longer(-n, names_to = "response_type", values_to = "rate") %>%
+  mutate(response_type = gsub("pct_", "", response_type))
+
+print(support_summary)
+
+# McNemar test: suspension vs. guard called (paired binary comparison)
+# Requires a contingency table of the two binary variables
+mcnemar_df <- PITS_public %>%
+  mutate(
+    guard_called = ifelse(`Support:Called Guard?` == "Yes", 1L, 0L),
+    guard_called = replace_na(guard_called, 0L)
+  )
+
+mcnemar_table <- table(
+  suspended    = mcnemar_df$susp_binary,
+  guard_called = mcnemar_df$guard_called
+)
+
+print(mcnemar_table)
+mcnemar_result <- mcnemar.test(mcnemar_table)
+print(mcnemar_result)
+```
+
+
+# =============================================================================
+# SECTION 2 (Main): Logistic regression — does reporting predict suspension
+#                   better than incident characteristics do?
+# =============================================================================
+
+```{r, echo=FALSE}
+# Prepare: drop rows missing key predictors
+pits_model_df <- PITS_public %>%
+  filter(!is.na(susp_binary),
+         !is.na(parsed_categories),
+         !is.na(hour_label),
+         !is.na(Location_masked),
+         !is.na(PITS_weekday)) %>%
+  mutate(
+    infraction_cat = as.factor(parsed_categories),
+    location       = as.factor(Location_masked),
+    weekday        = as.factor(PITS_weekday),
+    hour           = as.factor(hour_label)
+  )
+
+# Null model (intercept only — "reporting alone")
+logit_null <- glm(susp_binary ~ 1,
+                  data   = pits_model_df,
+                  family = binomial)
+
+# Full model with incident characteristics
+logit_full <- glm(susp_binary ~ infraction_cat + hour + weekday + location,
+                  data   = pits_model_df,
+                  family = binomial)
+
+summary(logit_full)
+
+# McFadden pseudo-R² — low value supports argument that
+# observable characteristics don't explain suspension well
+mcfadden_r2 <- 1 - (as.numeric(logLik(logit_full)) /
+                      as.numeric(logLik(logit_null)))
+cat("McFadden pseudo-R²:", round(mcfadden_r2, 4), "\n")
+
+# Tidy coefficient table
+logit_tidy <- tidy(logit_full, exponentiate = TRUE, conf.int = TRUE) %>%
+  arrange(p.value)
+print(logit_tidy)
+
+# Likelihood ratio test: does the full model fit better than null?
+lrt_result <- anova(logit_null, logit_full, test = "LRT")
+print(lrt_result)
+```
+
+
+# =============================================================================
+# SECTION 3: Chi-square — suspensions not proportional to infraction type
+# =============================================================================
+A non-significant result here supports you: suspensions are equally likely regardless of what the infraction was
+```{r}
+# Contingency table: infraction category × suspension binary
+infraction_susp_table <- table(
+  infraction = PITS_public$parsed_categories,
+  suspended  = PITS_public$susp_binary
+)
+
+print(infraction_susp_table)
+
+chi_infraction <- chisq.test(infraction_susp_table)
+print(chi_infraction)
+
+# Expected vs observed suspension rate per infraction category
+infraction_rates <- PITS_public %>%
+  filter(!is.na(parsed_categories)) %>%
+  group_by(parsed_categories) %>%
+  summarise(
+    n               = n(),
+    n_suspended     = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(suspension_rate))
+
+print(infraction_rates)
+```
+
+
+# =============================================================================
+# SECTION 4: Kruskal-Wallis — suspension length not calibrated to infraction
+# =============================================================================
+Tests whether suspension length varies by infraction category — if it doesn't, lengths aren't being calibrated to severity either
+```{r}
+# Filter to suspended incidents only, with valid length
+susp_length_df <- PITS_public %>%
+  filter(susp_binary == 1,
+         !is.na(Suspension_length),
+         !is.na(parsed_categories))
+
+# Descriptive: median length by infraction category
+length_by_infraction <- susp_length_df %>%
+  group_by(parsed_categories) %>%
+  summarise(
+    n              = n(),
+    median_days    = median(Suspension_length),
+    mean_days      = mean(Suspension_length),
+    sd_days        = sd(Suspension_length),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(median_days))
+
+print(length_by_infraction)
+
+# Kruskal-Wallis test
+kw_length <- kruskal.test(
+  Suspension_length ~ as.factor(parsed_categories),
+  data = susp_length_df
+)
+print(kw_length)
+
+# Dunn post-hoc test (only meaningful if KW is significant,
+# but run regardless — non-significant pairs support your argument)
+dunn_length <- dunn.test(
+  x     = susp_length_df$Suspension_length,
+  g     = susp_length_df$parsed_categories,
+  method = "bonferroni",
+  kw    = TRUE
+)
+
+# Kruskal-Wallis by location
+kw_location <- kruskal.test(
+  Suspension_length ~ as.factor(Location_masked),
+  data = susp_length_df
+)
+print(kw_location)
+```
+
+
+# =============================================================================
+# SECTION 5 (Supporting): Poisson/NB regression — usage volume does not
+#                          predict incident counts
+# =============================================================================
+
+```{r}
+# Poisson model: do more computer users → more incidents?
+poisson_model <- glm(
+  incident_count ~ user_count + Location_masked,
+  data   = ratio_data,
+  family = poisson
+)
+summary(poisson_model)
+
+# Check for overdispersion (variance >> mean → use negative binomial)
+dispersion_ratio <- sum(residuals(poisson_model, type = "pearson")^2) /
+                    poisson_model$df.residual
+cat("Dispersion ratio:", round(dispersion_ratio, 3),
+    " (>1.5 suggests overdispersion → prefer NB)\n")
+
+# Negative binomial model (more robust if overdispersed)
+nb_model <- glm.nb(
+  incident_count ~ user_count + Location_masked,
+  data = ratio_data
+)
+summary(nb_model)
+
+# Tidy both for comparison
+tidy_poisson <- tidy(poisson_model, exponentiate = TRUE, conf.int = TRUE)
+tidy_nb      <- tidy(nb_model,      exponentiate = TRUE, conf.int = TRUE)
+
+cat("\n--- Poisson IRRs ---\n"); print(tidy_poisson)
+cat("\n--- Negative Binomial IRRs ---\n"); print(tidy_nb)
+```
+
+
+# =============================================================================
+# SECTION 6: Chi-square — suspension rates vary by location (inconsistent
+#            application)
+# =============================================================================
+
+```{r}
+# Contingency table: location × suspension binary
+location_susp_table <- table(
+  location  = PITS_public$Location_masked,
+  suspended = PITS_public$susp_binary
+)
+
+print(location_susp_table)
+
+chi_location <- chisq.test(location_susp_table)
+print(chi_location)
+
+# Standardised residuals — which locations suspend more/less than expected?
+std_residuals <- as.data.frame(chi_location$stdres) %>%
+  setNames(c("location", "suspended", "std_resid")) %>%
+  filter(suspended == "1") %>%
+  arrange(desc(std_resid))
+
+cat("\nStandardised residuals (suspended == 1):\n")
+print(std_residuals)
+
+# Logistic regression: location as predictor of suspension
+logit_location <- glm(
+  susp_binary ~ Location_masked,
+  data   = PITS_public,
+  family = binomial
+)
+summary(logit_location)
+tidy(logit_location, exponentiate = TRUE, conf.int = TRUE)
+```
+
