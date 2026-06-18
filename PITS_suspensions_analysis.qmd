@@ -11,25 +11,54 @@ library(tidyverse)
 
 ### read in data
 ```{r}
-PITS_public <- read_csv("processed_data/PITS_public2.csv") %>% select(-1)
-PITS_public <- PITS_public %>% 
-  mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
+PITS_public <- read_csv("processed_data/PITS_public_share.csv") 
+# %>% select(-1)
+MyPC_public  <- read_csv("processed_data/MyPC_public_share.csv") 
+# %>% select(-1)
 
-MyPC_public <- read_csv("processed_data/MyPC_public.csv") %>% select(-1) 
-MyPC_public <- MyPC_public %>% 
-  mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
+# PITS_public <- read_csv("processed_data/PITS_public2.csv") %>% select(-1)
+# PITS_public <- PITS_public %>% 
+  # mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
+
+# MyPC_public <- read_csv("processed_data/MyPC_public.csv") %>% select(-1) 
+# MyPC_public <- MyPC_public %>% 
+  # mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
 ```
+
+add days of the week
+```{r}
+MyPC_public$MyPC_weekday <- weekdays(MyPC_public$booking_date)
+PITS_public$PITS_weekday <- weekdays(PITS_public$Date2)
+```
+
+
 
 hourly grouped usage
 ```{r}
 hourly_usage <- MyPC_public %>%
-  group_by(Location_Standard, hour_label, booking_date) %>%
+  group_by(Location_masked, hour_label, booking_date) %>%
   summarize(count = n(), .groups = "drop") %>% 
   arrange(as.numeric(substr(hour_label, 1, 2)))
 # mutate(hour_label = fct_reorder(as.factor(hour_label), hour_label)) 
 
 levels(hourly_usage$hour_label)
 ```
+getting unique counts
+```{r}
+length(unique(MyPC_public$new_login_id))
+
+length(unique(PITS_public$`Incident ID`))
+
+```
+```{r}
+PITS_public %>%
+  mutate(year = format(as.Date(Date2), "%Y")) %>%
+  group_by(year) %>%
+  summarise(n_incidents = n_distinct(`Incident ID`)) %>%
+  arrange(year)
+```
+
+
 # streamlined ratio process #
 ```{r}
 # for date, computer usage and any infractions
