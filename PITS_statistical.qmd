@@ -955,4 +955,27 @@ summary(mixed_model)
 library(performance)
 icc(mixed_model)
 ```
+deviations from the average log-odds of suspension
+```{r}
+library(lme4)
+
+ranef_branch <- ranef(mixed_model)$Location_masked
+ranef_branch$Location_masked <- rownames(ranef_branch)
+names(ranef_branch)[1] <- "random_effect"
+
+ranef_branch <- ranef_branch %>%
+  arrange(desc(random_effect))
+
+print(ranef_branch)
+
+# Visualize
+ggplot(ranef_branch, aes(x = reorder(Location_masked, random_effect),
+                         y = random_effect)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Branch-Level Random Effects (Suspension Likelihood)",
+       subtitle = "Positive = higher than average odds of suspension, controlling for time",
+       x = NULL, y = "Random Effect (log-odds deviation)") +
+  theme_minimal()
+```
 
