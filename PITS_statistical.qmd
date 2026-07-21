@@ -167,6 +167,9 @@ print(binom_test)
 
 ## Support service use vs. suspension rate
 ```{r}
+#| warning: false
+#| message: false
+
 support_summary <- PITS_public %>%
   summarise(
     n                  = n(),
@@ -206,6 +209,9 @@ print(mcnemar_result)
 # =============================================================================
 
 ```{r, echo=FALSE}
+#| warning: false
+#| message: false
+
 # Prepare: drop rows missing key predictors
 pits_model_df <- PITS_public %>%
   filter(!is.na(susp_binary),
@@ -254,6 +260,9 @@ print(lrt_result)
 # =============================================================================
 A non-significant result here supports you: suspensions are equally likely regardless of what the infraction was
 ```{r}
+#| warning: false
+#| message: false
+
 # Contingency table: infraction category × suspension binary
 infraction_susp_table <- table(
   infraction = PITS_public$parsed_categories,
@@ -284,6 +293,33 @@ print(infraction_rates)
 # =============================================================================
 # SECTION 4: Kruskal-Wallis — suspension length not calibrated to infraction
 # =============================================================================
+```{r}
+#| warning: false
+#| message: false
+
+# Proportion of incidents by infraction category
+PITS_public %>%
+  filter(!is.na(parsed_categories)) %>%
+  count(parsed_categories) %>%
+  mutate(pct = n / sum(n) * 100) %>%
+  arrange(desc(n))
+
+# Suspension rate *within* each category
+# (are large categories also suspending at higher rates?)
+PITS_public %>%
+  filter(!is.na(parsed_categories)) %>%
+  group_by(parsed_categories) %>%
+  summarise(
+    n               = n(),
+    n_suspended     = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n))
+
+
+```
+
 Tests whether suspension length varies by infraction category — if it doesn't, lengths aren't being calibrated to severity either
 ```{r}
 # Filter to suspended incidents only, with valid length
@@ -337,6 +373,8 @@ print(kw_location)
 # =============================================================================
 
 ```{r}
+#| warning: false
+
 # Poisson model: do more computer users → more incidents?
 poisson_model <- glm(
   incident_count ~ user_count + Location_masked,
@@ -373,6 +411,9 @@ cat("\n--- Negative Binomial IRRs ---\n"); print(tidy_nb)
 # =============================================================================
 
 ```{r}
+#| warning: false
+#| message: false
+
 # Contingency table: location × suspension binary
 location_susp_table <- table(
   location  = PITS_public$Location_masked,
@@ -401,5 +442,517 @@ logit_location <- glm(
 )
 summary(logit_location)
 tidy(logit_location, exponentiate = TRUE, conf.int = TRUE)
+```
+
+# =============================================================================
+# SECTION 7: Day of week and time of day — incidents and suspensions
+# =============================================================================
+
+```{r}
+#| warning: false
+#| message: false
+
+# ── 7a. Order weekdays Mon–Sun ────────────────────────────────────────────────
+weekday_levels <- c("Monday", "Tuesday", "Wednesday", "Thursday",
+                    "Friday", "Saturday", "Sunday")
+
+PITS_public <- PITS_public %>%
+  mutate(PITS_weekday = factor(PITS_weekday, levels = weekday_levels))
+
+# # ── 7b. Incidents and suspensions by day of week ──────────────────────────────
+# dow_summary <- PITS_public %>%
+#   filter(!is.na(PITS_weekday)) %>%
+#   group_by(PITS_weekday) %>%
+#   summarise(
+#     n_incidents   = n_distinct(`Incident ID`),
+#     n_suspensions = sum(susp_binary, na.rm = TRUE),
+#     suspension_rate = mean(susp_binary, na.rm = TRUE),
+#     .groups = "drop"
+#   )
+# 
+# print(dow_summary)
+# 
+# # Chi-square: are incidents distributed evenly across days?
+# chisq_dow_incidents <- chisq.test(dow_summary$n_incidents)
+# cat("\nChi-square — incident counts across weekdays:\n")
+# print(chisq_dow_incidents)
+# 
+# # Chi-square: are suspensions distributed evenly across days?
+# chisq_dow_suspensions <- chisq.test(dow_summary$n_suspensions)
+# cat("\nChi-square — suspension counts across weekdays:\n")
+# print(chisq_dow_suspensions)
+# 
+# # ── 7c. Suspension rate by day — is any day more likely to suspend? ───────────
+# # Logistic regression with weekday as predictor
+# logit_dow <- glm(
+#   susp_binary ~ PITS_weekday,
+#   data   = PITS_public %>% filter(!is.na(PITS_weekday)),
+#   family = binomial
+# )
+# cat("\nLogistic regression — weekday as predictor of suspension:\n")
+# tidy(logit_dow, exponentiate = TRUE, conf.int = TRUE) %>% print()
+
+# In Section 7b — filter Sunday out
+dow_summary <- PITS_public %>%
+  filter(!is.na(PITS_weekday), PITS_weekday != "Sunday") %>%
+  group_by(PITS_weekday) %>%
+  summarise(
+    n_incidents     = n_distinct(`Incident ID`),
+    n_suspensions   = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# In Section 7c — filter Sunday out of the logistic regression too
+logit_dow <- glm(
+  susp_binary ~ PITS_weekday,
+  data   = PITS_public %>% filter(!is.na(PITS_weekday), PITS_weekday != "Sunday"),
+  family = binomial
+)
+# ── 7d. Incidents and suspensions by hour of day ──────────────────────────────
+# hour_summary <- PITS_public %>%
+#   filter(!is.na(hour_label)) %>%
+#   group_by(hour_label) %>%
+#   summarise(
+#     n_incidents     = n_distinct(`Incident ID`),
+#     n_suspensions   = sum(susp_binary, na.rm = TRUE),
+#     suspension_rate = mean(susp_binary, na.rm = TRUE),
+#     .groups = "drop"
+#   ) %>%
+#   arrange(hour_label)
+
+
+
+```
+
+```{r}
+library(lubridate)
+
+
+hour_summary <- PITS_public %>%
+  filter(!is.na(hour_label)) %>%
+  mutate(hour_label = substr(hour_label, 1, 2)) %>%
+  group_by(hour_label) %>%
+  summarise(
+    n_incidents     = n_distinct(`Incident ID`),
+    n_suspensions   = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(as.numeric(hour_label))
+
+
+# Kruskal-Wallis: does suspension rate vary by hour?
+# (use raw binary per row, not aggregated rates)
+kw_hour <- kruskal.test(
+  susp_binary ~ as.factor(hour_label),
+  data = PITS_public %>% filter(!is.na(hour_label))
+)
+cat("\nKruskal-Wallis — suspension rate by hour of day:\n")
+print(kw_hour)
+
+# ── 7e. Cross-tab: day of week × hour of day (incident counts) ───────────────
+dow_hour_table <- PITS_public %>%
+  filter(!is.na(PITS_weekday), !is.na(hour_label)) %>%
+  group_by(PITS_weekday, hour_label) %>%
+  summarise(
+    n_incidents     = n_distinct(`Incident ID`),
+    n_suspensions   = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Peak combinations — top 10 by incident count
+cat("\nTop 10 day × hour combinations by incident count:\n")
+dow_hour_table %>%
+  arrange(desc(n_incidents)) %>%
+  slice_head(n = 10) %>%
+  print()
+
+# Peak combinations — top 10 by suspension rate (min 5 incidents to filter noise)
+cat("\nTop 10 day × hour combinations by suspension rate (n ≥ 5):\n")
+dow_hour_table %>%
+  filter(n_incidents >= 5) %>%
+  arrange(desc(suspension_rate)) %>%
+  slice_head(n = 10) %>%
+  print()
+```
+
+Day of Week
+Incident counts are not evenly distributed (χ² p < .0001). Tuesday, Thursday, and Wednesday are the busiest days (586, 616, 526 incidents), while Sunday is nearly absent (9 incidents). This likely reflects library operating hours and foot traffic patterns rather than anything behavioral.
+The more interesting finding is the suspension rate pattern. Suspension rates fall as the week progresses:
+DaySuspension RateMonday48.8%Tuesday43.6%Wednesday43.8%Thursday42.3%Friday35.0%Saturday31.1%Sunday29.4%
+The logistic regression confirms this is statistically significant for Tuesday through Saturday (all p < .05), with Monday as the reference category. The odds ratios tell you the direction clearly — by Friday, an incident is only 0.57 times as likely to result in suspension as the same incident on a Monday, and Saturday drops to 0.48. Sunday is not significant, likely because n=9 is too small to detect an effect.
+How to frame this: Early-week incidents are substantially more likely to result in suspension than late-week incidents, even though the nature of the infraction hasn't changed. This is consistent with a discretionary application argument — staff behavior around suspension varies systematically by day in a way the written policy doesn't explain or prescribe.
+
+Hour of Day
+The early-morning hours are an immediate data quality flag. Hours 00:00–06:00 have very small n (1–10 incidents) but produce extreme suspension rates — 92.9% at 04:00, 78.6% at 02:00. These are almost certainly data entry errors or timestamp anomalies rather than real overnight incidents, since most public libraries are not open at 2–4am. I'd recommend either filtering these out of the analysis or noting them as artifacts.
+The meaningful hours are 08:00 onward. The Kruskal-Wallis is significant (χ² = 249, p < .0001), so suspension rates genuinely vary by hour. You'll want to print the full table to see the afternoon pattern clearly.
+
+Day × Hour combinations
+Two distinct patterns emerge:
+Peak incident volume clusters in weekday afternoons, 13:00–16:00 — Thursday 15:00 (n=92), Wednesday 14:00 (n=88), Thursday 16:00 (n=84). This is your busy period, likely corresponding to after-school hours and afternoon foot traffic.
+Peak suspension rates cluster around 17:00 on weekdays — Monday 17:00 (85.4%), Tuesday 17:00 (71.7%), Thursday 17:00 (69.1%). This is striking because 17:00 is not the busiest hour for incidents, but it produces the highest suspension rates. One plausible explanation: 17:00 is approaching closing time at many branches, and staff may be more likely to suspend as a way of resolving a situation before end of shift rather than leaving it open.
+Wednesday 16:00 is an outlier worth flagging — 72 incidents but 102 suspensions (suspension rate 60.7%). The fact that suspensions exceed incidents suggests some incidents generated multiple suspension records, which may be worth investigating in your data.
+
+```{r}
+incident_hour_table <- PITS_public %>%
+  filter(!is.na(PITS_weekday), !is.na(hour_label)) %>%
+  group_by(PITS_weekday, hour_label) %>%
+  summarise(
+    n_incidents = n_distinct(`Incident ID`),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    incident_rate = n_incidents / sum(n_incidents)
+  ) 
+
+incident_hour_table%>%
+  arrange(desc(incident_rate)) %>%
+  slice_head(n = 10)
+```
+
+
+```{r}
+```
+
+
+```{r}
+incident_hour_table
+```
+
+# ── 7f. Visualisations ────────────────────────────────────────────────────────
+
+```{r fig.width=9, fig.height=4}
+# Incidents by day of week
+ggplot(dow_summary, aes(x = PITS_weekday, y = n_incidents)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = n_incidents), vjust = -0.4, size = 3.5) +
+  labs(title = "Incidents by Day of Week",
+       x = NULL, y = "Number of Incidents") +
+  theme_minimal()
+
+# Suspension rate by day of week
+ggplot(dow_summary, aes(x = PITS_weekday, y = suspension_rate)) +
+  geom_col(fill = "coral") +
+  geom_text(aes(label = scales::percent(suspension_rate, accuracy = 1)),
+            vjust = -0.4, size = 3.5) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Suspension Rate by Day of Week",
+       x = NULL, y = "Suspension Rate") +
+  theme_minimal()
+```
+
+```{r fig.width=11, fig.height=4}
+# Incidents by hour of day
+ggplot(hour_summary, aes(x = hour_label, y = n_incidents)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Incidents by Hour of Day",
+       x = "Hour", y = "Number of Incidents") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Suspension rate by hour of day
+ggplot(hour_summary, aes(x = hour_label, y = suspension_rate)) +
+  geom_col(fill = "coral") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Suspension Rate by Hour of Day",
+       x = "Hour", y = "Suspension Rate") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r fig.width=11, fig.height=6}
+#| warning: false
+#| message: false
+
+# Heatmap: incidents by day × hour
+ggplot(dow_hour_table,
+       aes(x = hour_label, y = PITS_weekday, fill = n_incidents)) +
+  geom_tile(colour = "white") +
+  scale_fill_gradient(low = "white", high = "steelblue",
+                      name = "Incidents") +
+  labs(title = "Incident Count Heatmap: Day of Week × Hour of Day",
+       x = "Hour", y = NULL) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Heatmap: suspension rate by day × hour (cells with n < 5 greyed out)
+dow_hour_table %>%
+  mutate(rate_display = ifelse(n_incidents < 5, NA, suspension_rate)) %>%
+  ggplot(aes(x = hour_label, y = PITS_weekday, fill = rate_display)) +
+  geom_tile(colour = "white") +
+  scale_fill_gradient(low = "white", high = "coral",
+                      name = "Susp. Rate",
+                      labels = scales::percent_format(),
+                      na.value = "grey90") +
+  labs(title = "Suspension Rate Heatmap: Day of Week × Hour of Day",
+       subtitle = "Grey = fewer than 5 incidents",
+       x = "Hour", y = NULL) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+# =============================================================================
+# SECTION 8: MyPC usage volume by day of week — are busy days incident days?
+# =============================================================================
+
+```{r}
+#| warning: false
+#| message: false
+
+# ── 8a. Summarise MyPC usage by day of week ───────────────────────────────────
+# MyPC_public <- MyPC_public %>%
+#   mutate(MyPC_weekday = factor(MyPC_weekday, levels = weekday_levels))
+# 
+# mypc_dow <- MyPC_public %>%
+#   filter(!is.na(MyPC_weekday)) %>%
+#   group_by(MyPC_weekday) %>%
+#   summarise(
+#     n_sessions    = n(),
+#     n_unique_users = n_distinct(new_login_id),
+#     .groups = "drop"
+#   )
+
+# In Section 8a — filter Sunday out of MyPC
+mypc_dow <- MyPC_public %>%
+  filter(!is.na(MyPC_weekday), MyPC_weekday != "Sunday") %>%
+  group_by(MyPC_weekday) %>%
+  summarise(
+    n_sessions     = n(),
+    n_unique_users = n_distinct(new_login_id),
+    .groups = "drop"
+  )
+print(mypc_dow)
+
+# ── 8b. Join MyPC usage with incident counts by weekday ───────────────────────
+dow_combined <- dow_summary %>%
+  left_join(mypc_dow, by = c("PITS_weekday" = "MyPC_weekday")) %>%
+  mutate(
+    incidents_per_100_sessions = (n_incidents / n_sessions) * 100,
+    suspensions_per_100_sessions = (n_suspensions / n_sessions) * 100
+  )
+
+print(dow_combined)
+
+# ── 8c. Correlation: do busier days produce more incidents? ───────────────────
+cor_sessions_incidents <- cor.test(
+  dow_combined$n_sessions,
+  dow_combined$n_incidents,
+  method = "spearman"
+)
+cat("\nSpearman correlation — sessions vs. incidents by weekday:\n")
+print(cor_sessions_incidents)
+
+cor_sessions_suspensions <- cor.test(
+  dow_combined$n_sessions,
+  dow_combined$n_suspensions,
+  method = "spearman"
+)
+cat("\nSpearman correlation — sessions vs. suspensions by weekday:\n")
+print(cor_sessions_suspensions)
+
+# ── 8d. Correlation: does higher usage predict higher suspension RATE? ─────────
+# This is the key test — if suspension rate rises with usage,
+# it's a volume effect; if not, something else is driving it
+cor_sessions_rate <- cor.test(
+  dow_combined$n_sessions,
+  dow_combined$suspension_rate,
+  method = "spearman"
+)
+cat("\nSpearman correlation — sessions vs. suspension rate by weekday:\n")
+print(cor_sessions_rate)
+```
+
+```{r fig.width = 9, fig.height = 4}
+#| warning: false
+#| message: false
+
+# ── 8e. Visualise: sessions vs incidents by weekday ───────────────────────────
+dow_combined %>%
+  dplyr::select(PITS_weekday, n_incidents, n_sessions) %>%
+  pivot_longer(cols = c(n_incidents, n_sessions),
+               names_to = "metric", values_to = "count") %>%
+  mutate(metric = recode(metric,
+                         n_incidents = "Incidents",
+                         n_sessions  = "Computer Sessions")) %>%
+  ggplot(aes(x = PITS_weekday, y = count, fill = metric)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c("Computer Sessions" = "steelblue",
+                                "Incidents"         = "coral")) +
+  labs(title = "Computer Sessions vs. Incidents by Day of Week",
+       x = NULL, y = "Count", fill = NULL) +
+  theme_minimal()
+
+# ── 8f. Incidents per 100 sessions — normalised incident rate ─────────────────
+ggplot(dow_combined,
+       aes(x = PITS_weekday, y = incidents_per_100_sessions)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(incidents_per_100_sessions, 2)),
+            vjust = -0.4, size = 3.5) +
+  labs(title = "Incidents per 100 Computer Sessions by Day of Week",
+       subtitle = "Normalises for usage volume — higher = more incidents relative to visitors",
+       x = NULL, y = "Incidents per 100 Sessions") +
+  theme_minimal()
+
+# ── 8g. Suspension rate vs. session volume scatterplot ────────────────────────
+ggplot(dow_combined,
+       aes(x = n_sessions, y = suspension_rate, label = PITS_weekday)) +
+  geom_point(size = 3, colour = "steelblue") +
+  geom_text(vjust = -0.7, size = 3.5) +
+  geom_smooth(method = "lm", se = TRUE, colour = "coral", linewidth = 0.8) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Suspension Rate vs. Computer Session Volume by Weekday",
+       subtitle = "If volume drove suspension rates, points would trend upward",
+       x = "Number of Computer Sessions", y = "Suspension Rate") +
+  theme_minimal()
+```
+
+```{r}
+#| warning: false
+#| message: false
+
+library(ggrepel)
+
+ggplot(dow_combined,
+       aes(x = n_sessions, y = suspension_rate, label = PITS_weekday)) +
+  geom_point(size = 3, colour = "steelblue") +
+  geom_text_repel(size = 3.5,
+                  nudge_y = -0.01,
+                  box.padding = 0.4,
+                  point.padding = 0.3) +
+  geom_smooth(method = "lm", se = TRUE, colour = "coral", linewidth = 0.8) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Suspension Rate vs. Computer Session Volume by Weekday",
+       # subtitle = "If volume drove suspension rates, points would trend upward",
+       x = "Number of Computer Sessions", y = "Suspension Rate") +
+  theme_minimal()
+```
+
+1. Add cramer's v test 
+```{r}
+library(rcompanion)
+
+location_susp_table <- table(
+  location  = PITS_public$Location_masked,
+  suspended = PITS_public$susp_binary
+)
+
+# print(location_susp_table)
+# Location × suspension
+cramer_location <- cramerV(location_susp_table)
+cat("Cramér's V — Location:", cramer_location, "\n")
+
+# Weekday × suspension
+weekday_susp_table <- table(
+  weekday   = PITS_public$PITS_weekday,
+  suspended = PITS_public$susp_binary
+)
+cramer_weekday <- cramerV(weekday_susp_table)
+cat("Cramér's V — Weekday:", cramer_weekday, "\n")
+
+# Hour × suspension
+hour_susp_table <- table(
+  hour      = PITS_public$hour_label,
+  suspended = PITS_public$susp_binary
+)
+cramer_hour <- cramerV(hour_susp_table)
+cat("Cramér's V — Hour:", cramer_hour, "\n")
+```
+
+
+2. Combined logistic regression — compare contribution of each predictor
+This is the key test. Put location, weekday, and hour into the same model and see which one contributes the most explanatory power when the others are controlled for.
+```{r}
+combined_df <- PITS_public %>%
+  filter(!is.na(susp_binary), !is.na(Location_masked),
+         !is.na(PITS_weekday), !is.na(hour_label))
+
+# Full model
+logit_combined <- glm(
+  susp_binary ~ Location_masked + PITS_weekday + hour_label,
+  data   = combined_df,
+  family = binomial
+)
+summary(logit_combined)
+
+# Drop each block and compare fit via likelihood ratio test
+logit_no_location <- glm(susp_binary ~ PITS_weekday + hour_label,
+                         data = combined_df, family = binomial)
+logit_no_weekday   <- glm(susp_binary ~ Location_masked + hour_label,
+                         data = combined_df, family = binomial)
+logit_no_hour       <- glm(susp_binary ~ Location_masked + PITS_weekday,
+                         data = combined_df, family = binomial)
+
+cat("\nDoes removing Location hurt the model? (larger stat = location matters more)\n")
+anova(logit_no_location, logit_combined, test = "LRT")
+
+cat("\nDoes removing Weekday hurt the model?\n")
+anova(logit_no_weekday, logit_combined, test = "LRT")
+
+cat("\nDoes removing Hour hurt the model?\n")
+anova(logit_no_hour, logit_combined, test = "LRT")
+```
+collapse spase hours
+```{r}
+combined_df %>%
+  count(Location_masked, susp_binary) %>%
+  pivot_wider(names_from = susp_binary, values_from = n, values_fill = 0) %>%
+  filter(`1` < 3 | `0` < 3)  # flag branches with near-zero cells
+
+combined_df %>%
+  count(hour_label, susp_binary) %>%
+  pivot_wider(names_from = susp_binary, values_from = n, values_fill = 0) %>%
+  filter(`1` < 3 | `0` < 3)  # flag hours with near-zero cells
+```
+
+Next: Cramér's V and pseudo-R² for the final piece
+Once the separation issue is addressed, re-run:
+```{r}
+mcfadden <- function(model, null) {
+  1 - as.numeric(logLik(model)) / as.numeric(logLik(null))
+}
+
+logit_null     <- glm(susp_binary ~ 1, data = combined_df, family = binomial)
+logit_location <- glm(susp_binary ~ Location_masked, data = combined_df, family = binomial)
+logit_weekday  <- glm(susp_binary ~ PITS_weekday,     data = combined_df, family = binomial)
+logit_hour     <- glm(susp_binary ~ hour_label,        data = combined_df, family = binomial)
+
+cat("Pseudo-R² — Location alone:", round(mcfadden(logit_location, logit_null), 4), "\n")
+cat("Pseudo-R² — Weekday alone: ", round(mcfadden(logit_weekday, logit_null), 4), "\n")
+cat("Pseudo-R² — Hour alone:    ", round(mcfadden(logit_hour, logit_null), 4), "\n")
+```
+
+3. compare variance explained with pseudo R^2 by predictor alone
+```{r}
+logit_null      <- glm(susp_binary ~ 1, data = combined_df, family = binomial)
+logit_location  <- glm(susp_binary ~ Location_masked, data = combined_df, family = binomial)
+logit_weekday   <- glm(susp_binary ~ PITS_weekday,     data = combined_df, family = binomial)
+logit_hour      <- glm(susp_binary ~ hour_label,        data = combined_df, family = binomial)
+
+mcfadden <- function(model, null) {
+  1 - as.numeric(logLik(model)) / as.numeric(logLik(null))
+}
+
+cat("Pseudo-R² — Location alone:", round(mcfadden(logit_location, logit_null), 4), "\n")
+cat("Pseudo-R² — Weekday alone: ", round(mcfadden(logit_weekday, logit_null), 4), "\n")
+cat("Pseudo-R² — Hour alone:    ", round(mcfadden(logit_hour, logit_null), 4), "\n")
+```
+4.  Mixed-effects model — treat location as a random effect
+If you want to go further, a mixed model quantifies how much of the unexplained variance in suspension is attributable to branch-level clustering, independent of time effects.
+```{r}
+library(lme4)
+
+mixed_model <- glmer(
+  susp_binary ~ PITS_weekday + hour_label + (1 | Location_masked),
+  data   = combined_df,
+  family = binomial
+)
+summary(mixed_model)
+
+# Intraclass correlation — how much variance is due to branch?
+library(performance)
+icc(mixed_model)
 ```
 
