@@ -3,10 +3,14 @@ title: "PITS_suspensions_analysis"
 format: html
 editor: visual
 ---
+last check 2026-07-27
+# Deprecated Do NOT USE
+
 ### read in libraries
 ```{r}
 library(readr)
 library(tidyverse)
+library(dplyr)
 ```
 
 ### read in data
@@ -15,6 +19,9 @@ PITS_public <- read_csv("processed_data/PITS_public_share.csv")
 # %>% select(-1)
 MyPC_public  <- read_csv("processed_data/MyPC_public_share.csv") 
 # %>% select(-1)
+
+MyPC_public <- MyPC_public %>%
+    dplyr::select(-Site, -Resource)
 
 # PITS_public <- read_csv("processed_data/PITS_public2.csv") %>% select(-1)
 # PITS_public <- PITS_public %>% 
@@ -31,6 +38,11 @@ MyPC_public$MyPC_weekday <- weekdays(MyPC_public$booking_date)
 PITS_public$PITS_weekday <- weekdays(PITS_public$Date2)
 ```
 
+Check incidents
+23896 Suspension end date was 1924-09-19 
+
+25180 suspension end date was 1926-05-10
+- corrected on 7/27
 
 
 hourly grouped usage
@@ -50,6 +62,7 @@ length(unique(MyPC_public$new_login_id))
 length(unique(PITS_public$`Incident ID`))
 
 ```
+Simple table of incidents per year
 ```{r}
 PITS_public %>%
   mutate(year = format(as.Date(Date2), "%Y")) %>%
@@ -58,6 +71,13 @@ PITS_public %>%
   arrange(year)
 ```
 
+```{r}
+MyPC_public %>%
+  mutate(year = format(as.Date(booking_date), "%Y")) %>%
+  group_by(year) %>%
+  summarise(n_logins = n_distinct(new_login_id)) %>%
+  arrange(year)
+```
 
 # streamlined ratio process #
 ```{r}
@@ -239,7 +259,7 @@ MyPC_public$new_login_id <- sapply(MyPC_public$`Login ID`, digest, algo="md5")
 
 ```
 # Drop the original ID column
-# df$original_id <- NULL
+df$original_id <- NULL
 drop site, location, resource, location_standard, location, login id
 ```{r}
 MyPC_public_share <- MyPC_public %>% 
