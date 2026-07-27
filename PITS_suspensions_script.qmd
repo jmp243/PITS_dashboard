@@ -4,7 +4,9 @@ format: html
 editor: visual
 ---
 
-last updated 12/6/2025 \# Navigating Data in Public Libraries: Challenges & Opportunities \## Running Code
+last updated 7/27/2026 
+corrected end date anomalies in the suspensions
+\## Navigating Data in Public Libraries: Challenges & Opportunities \## Running Code
 
 ### load libraries
 
@@ -394,7 +396,7 @@ hourly_loc_long <- hourly_location_summary %>%
 # less aggressive parsing that works better
 
 ```{r}
-# 
+# # 
 PITS_categories <- PITS_2023_2025_public %>%
   # Create row ID for later joining
   mutate(row_id = row_number()) %>%
@@ -434,20 +436,20 @@ parse_categories <- function(categories_string) {
   if (is.na(categories_string) || categories_string == "") {
     return(character(0))
   }
-  
+
   # Replace commas followed by spaces with a temporary delimiter
   # This preserves phrases like "Dangerous, Threatening, or Illegal Conduct"
   temp_string <- gsub(", ", "<<COMMA_SPACE>>", categories_string)
-  
+
   # Split by remaining commas (those without spaces after them)
   split_categories <- strsplit(temp_string, ",")[[1]]
-  
+
   # Restore the original comma-space combinations
   result <- gsub("<<COMMA_SPACE>>", ", ", split_categories)
-  
+
   # Trim any whitespace
   result <- trimws(result)
-  
+
   return(result)
 }
 
@@ -620,6 +622,7 @@ PITS_public <- rbind(result_df, PITS_categories2) %>%
 
 ```
 write.csv(PITS_public1, "processed_data/PITS_public1.csv")
+
 ```{r}
 # Convert start date and end date as dates
 PITS_public$`Start Date` <- as.Date(PITS_public$`Start Date`, format = "%m/%d/%Y")
@@ -627,6 +630,13 @@ PITS_public$`End Date` <- as.Date(PITS_public$`End Date`, format = "%m/%d/%Y")
 
 ```
 
+# correct some error dates
+```{r}
+PITS_public$`End Date`[PITS_public$`Incident ID` == "23896"] <- "2024-09-19"
+PITS_public$`End Date`[PITS_public$`Incident ID` == "25180"] <- "2026-05-10"
+
+```
+ 
 # calculate suspension duration
 
 ```{r}
@@ -740,22 +750,22 @@ PITS_public_susp
 
 ```{r}
 # From making a table
-library(ggplot2)
-
-# Ensure branch_masked is a factor
-# followup_public$branch_masked <- as.factor(followup_public$branch_masked)
-
-ggplot(PITS_public_susp, aes(x = Location_masked, y = Suspension_length, fill = Location_masked)) +
-  geom_violin(trim = FALSE, color = "black") +        # Full violin shape with border
-  geom_boxplot(width = 0.1, fill = "white", alpha = 0.7) +  # Optional: overlay boxplot
-  stat_summary(fun = median, geom = "point", size = 2, color = "red") +  # Add median points
-  labs(
-    title = "Distribution of Suspension Length by Branch",
-    x = "Branch",
-    y = "Suspension Length"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "none")
+# library(ggplot2)
+# 
+# # Ensure branch_masked is a factor
+# # followup_public$branch_masked <- as.factor(followup_public$branch_masked)
+# 
+# ggplot(PITS_public_susp, aes(x = Location_masked, y = Suspension_length, fill = Location_masked)) +
+#   geom_violin(trim = FALSE, color = "black") +        # Full violin shape with border
+#   geom_boxplot(width = 0.1, fill = "white", alpha = 0.7) +  # Optional: overlay boxplot
+#   stat_summary(fun = median, geom = "point", size = 2, color = "red") +  # Add median points
+#   labs(
+#     title = "Distribution of Suspension Length by Branch",
+#     x = "Branch",
+#     y = "Suspension Length"
+#   ) +
+#   theme_minimal() +
+#   theme(legend.position = "none")
 
 ```
 
@@ -767,3 +777,17 @@ write.csv(PITS_public2, "processed_data/PITS_public2.csv")
 
 write.csv(MyPC_public, "processed_data/MyPC_public.csv")
 ```
+
+# shareable format for the data
+```{r}
+PITS_public_share <- PITS_public2 %>% 
+  select(-Location_Standard, -`Suspension Note`)
+
+write.csv(PITS_public_share, "processed_data/PITS_public_share.csv")
+
+MyPC_public_share <- MyPC_public %>% 
+  select(-Location, -Location_Standard, -Site, -Resource)
+
+write.csv(MyPC_public_share, "processed_data/MyPC_public_share.csv")
+```
+
