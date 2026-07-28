@@ -785,9 +785,17 @@ PITS_public_share <- PITS_public2 %>%
 
 write.csv(PITS_public_share, "processed_data/PITS_public_share.csv")
 
+
+```
+for new MyPC data
+```{r}
+library(digest)
+MyPC_public$new_login_id <- sapply(MyPC_public$`Login ID`, digest, algo="md5")
+
 MyPC_public_share <- MyPC_public %>% 
-  select(-Location, -Location_Standard, -Site, -Resource)
+  select(-Location, -Location_Standard, -Site, -Resource, -`Login ID`)
 
 write.csv(MyPC_public_share, "processed_data/MyPC_public_share.csv")
+
 ```
 
