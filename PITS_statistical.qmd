@@ -24,8 +24,8 @@ MyPC_public  <- read_csv("processed_data/MyPC_public_share.csv")
 ```
 Drop any extraneous columns
 ```{r}
-MyPC_public <- MyPC_public %>% 
-  dplyr::select(-Site, -Resource)
+# MyPC_public <- MyPC_public %>% 
+#   dplyr::select(-Site, -Resource)
 
 ```
 
@@ -78,13 +78,14 @@ MyPC_public$MyPC_weekday <- weekdays(MyPC_public$booking_date)
 # Pre-compute ratio data (computer users vs incidents)
 # =============================================================================
 ```{r}
+# this is just to get a ratio and does not need the hierarchical categories
 PITS_incident_counts <- PITS_public %>%
   distinct(`Incident ID`, .keep_all = TRUE) %>% 
   group_by(Location_masked, date = as.Date(Date2)) %>%
   summarise(incident_count = n_distinct(`Incident ID`), .groups = "drop")
 
 MyPC_counts <- MyPC_public %>%
-  distinct(`Login ID`, .keep_all = TRUE) %>% 
+  distinct(new_login_id, .keep_all = TRUE) %>% 
   group_by(Location_masked, date = booking_date) %>%
   summarise(user_count = n(), .groups = "drop")
 
@@ -121,7 +122,7 @@ PITS_susp_counts <- PITS_susp_deduped %>%
     median_susp_length = median(Suspension_length),
     .groups = "drop"
   )
-
+# again severity will come into play later
 susp_ratio_data <- PITS_incident_counts %>%
   left_join(PITS_susp_counts, by = c("Location_masked", "date")) %>%
   mutate(
@@ -183,15 +184,197 @@ binom_test <- binom.test(
 binom_test
 ```
 
-## Support service use vs. suspension rate
+
+### Season 
+```{r}
+PITS_public <- PITS_public %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>% 
+  mutate(
+    month_num   = as.integer(format(Date2, "%m")),
+    month_name  = factor(format(Date2, "%B"),
+                         levels = month.name),  # orders Jan–Dec correctly
+    season      = case_when(
+      month_num %in% c(6, 7, 8)  ~ "Summer",
+      month_num %in% c(9, 10, 11) ~ "Fall",
+      month_num %in% c(12, 1, 2)  ~ "Winter",
+      month_num %in% c(3, 4, 5)   ~ "Spring",
+      TRUE ~ NA_character_
+    ),
+    season = factor(season, levels = c("Winter", "Spring", "Summer", "Fall"))
+  )
+
+```
+
+
+
+# Predictor Cramers_V Pseudo_R2_Nagelkerke
+# =============================================================================
+# SECTION 2: predictor cramers v pseudo r^2
+# =============================================================================
+
+```{r}
+library(dplyr)
+library(purrr)
+library(rstatix)
+library(performance)
+
+# 1. Establish your clean, deduplicated baseline data (One row per Incident ID)
+severity_hierarchy <- c(
+  "Dangerous, Threatening, or Illegal Conduct", 
+  "Disruptive Personal Behavior", 
+  "Use and preservation of library materials and property", 
+  "Incident Impact Level - Staff Traumatic Stress", 
+  "Other", 
+  "Children in the Library", 
+  "No Infractions Set", 
+  "Medical 911"
+)
+
+
+
+# Create an independent, deduplicated dataset using your severity logic
+PITS_deduplicated <- PITS_public %>% 
+  filter(
+    !is.na(parsed_categories),
+    parsed_categories %in% severity_hierarchy
+  ) %>% 
+  mutate(parsed_categories = factor(parsed_categories, 
+                                    levels = severity_hierarchy, 
+                                    ordered = TRUE)) %>% 
+  arrange(`Incident ID`, parsed_categories) %>% 
+  distinct(`Incident ID`, .keep_all = TRUE) # Now each incident counts exactly once
+
+# PITS_deduplicated <- PITS_deduplicated %>%
+#   mutate(
+#     # Automatically lumps categories with < 30 total rows into the custom name
+#     parsed_categories = fct_lump_min(
+#       as.factor(parsed_categories), 
+#       min = 30, 
+#       other_level = "Minor Infractions"
+#     ),
+#     parsed_categories = as.character(parsed_categories)
+#   )
+```
+
+### create minor infractions category
+```{r}
+library(dplyr)
+library(forcats)
+
+
+PITS_deduplicated <- PITS_deduplicated %>%
+  mutate(
+    parsed_categories1 = as.character(parsed_categories),
+    parsed_categories1 = case_when(
+      parsed_categories1 %in% c(
+        "Incident Impact Level - Staff Traumatic Stress", 
+        "No Infractions Set", 
+        "Medical", 
+        "Children in the Library"
+      ) ~ "Minor Infractions",
+      TRUE ~ parsed_categories
+    )
+  )
+
+```
+
+
+```{r}
+# # 1. Isolate the filtered data for this specific predictor
+# check_df <- PITS_deduplicated %>% 
+#   filter(!is.na(susp_binary), !is.na(parsed_categories))
+# 
+# # 2. Check the number of unique categories remaining
+# print(paste("Unique outcome levels:", length(unique(check_df$susp_binary))))
+# print(paste("Unique predictor levels:", length(unique(check_df$parsed_categories))))
+# 
+# # 3. View the raw contingency table
+# raw_table <- table(as.factor(check_df$susp_binary), as.factor(check_df$parsed_categories))
+# print(raw_table)
+```
+
+
+```{r}
+# use shortened parsed_categories1 which has the minor infractions category
+# 2. Define your modeling elements
+outcome_var <- "susp_binary"
+predictors  <- c("parsed_categories1", "Location_masked", "hour_label", 
+                 "PITS_weekday", "season", "month_name")
+
+# 3. Map through predictors using the deduplicated data
+metrics_table <- map_df(predictors, function(pred) {
+  
+  # Clean missing values using the deduplicated baseline
+  clean_df <- PITS_deduplicated %>% 
+    filter(!is.na(.data[[outcome_var]]), !is.na(.data[[pred]]))
+  
+  # Create the raw contingency table
+  tab <- table(as.factor(clean_df[[outcome_var]]), as.factor(clean_df[[pred]]))
+
+  # # Calculate Cramér's V safely
+  v_val <- tryCatch({
+  if (ncol(tab) < 2 || nrow(tab) < 2) {
+    0
+  } else {
+    # Run a standard base R chi-square test
+    chi_test <- chisq.test(tab, correct = TRUE)
+    chi_sq <- chi_test$statistic
+    n_total <- sum(tab)
+    
+    # Mathematical definition of Cramer's V
+    min_dim <- min(nrow(tab) - 1, ncol(tab) - 1)
+    
+    res <- sqrt(chi_sq / (n_total * min_dim))
+    
+    # Strip names and handle any unexpected NaN/NA values safely
+    res <- as.numeric(res)
+    if (is.na(res) || is.nan(res)) 0 else res
+  }
+}, error = function(e) {
+  return(0) # Returns 0 instead of killing the column with NA
+})
+#   # Tschuprow's T 
+#   v_val <- tryCatch({
+#   if (ncol(tab) < 2 || nrow(tab) < 2) {
+#     0
+#   } else {
+#     # Tschuprow's T handles your 2xN sparse table structure cleanly
+#     res <- vcd::assocstats(tab)$tschuprow
+#     if (is.nan(res) || is.na(res)) 0 else res
+#   }
+# }, error = function(e) NA)
+  # Calculate Nagelkerke Pseudo R-squared
+  model_formula <- as.formula(paste(outcome_var, "~", pred))
+  fit <- glm(model_formula, data = clean_df, family = binomial(link = "logit"))
+  
+  pseudo_r2 <- tryCatch({
+    as.numeric(performance::r2_nagelkerke(fit))
+  }, error = function(e) NA)
+  
+  # Return data frame row
+  data.frame(
+    Predictor = pred,
+    Cramers_V = round(v_val, 4),
+    Pseudo_R2_Nagelkerke = round(pseudo_r2, 4)
+  )
+})
+
+# 4. results table
+# View your accurate metrics table
+metrics_table <- metrics_table %>% arrange(desc(Pseudo_R2_Nagelkerke))
+metrics_table
+```
+
 ```{r}
 #| warning: false
 #| message: false
 
+## Support service use vs. suspension rate
+
 library(dplyr)
 library(tidyr)
 
-support_summary <- PITS_public %>% 
+support_summary <- PITS_deduplicated %>% 
   distinct(`Incident ID`, .keep_all = TRUE) %>% 
   summarise(
     # 1. Calculate raw counts (n)
@@ -237,11 +420,16 @@ print(mcnemar_result)
 ```
 
 
-# =============================================================================
-# SECTION 2 (Main): Logistic regression — does reporting predict suspension
-#                   better than incident characteristics do?
-# =============================================================================
 
+
+## Checking model fit and multi-collinearity
+
+
+ =============================================================================
+ SECTION 2 (Main): Logistic regression — does reporting predict suspension
+                   better than incident characteristics do?
+ =============================================================================
+DO not USE this because of the parsed categories
 ```{r, echo=FALSE}
 #| warning: false
 #| message: false
@@ -255,17 +443,18 @@ print(mcnemar_result)
 # # Define hours to exclude (midnight through 7am)
 # excluded_hours <- sprintf("%02d:00:00", 00:7)
 
-pits_model_df <- PITS_public %>%
-  distinct(`Incident ID`, .keep_all = TRUE) %>% 
+pits_model_df <- PITS_deduplicated %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>%  
   # filter(PITS_weekday != "Sunday",
   #       !hour_label %in% excluded_hours) %>%
   filter(!is.na(susp_binary),
-         !is.na(parsed_categories),
+         !is.na(parsed_categories1),
          !is.na(hour_label),
          !is.na(Location_masked),
+         # !is.na(month_name),
          !is.na(PITS_weekday)) %>%
   mutate(
-    infraction_cat = as.factor(parsed_categories),
+    infraction_cat = as.factor(parsed_categories1),
     location       = as.factor(Location_masked),
     weekday        = as.factor(PITS_weekday),
     hour           = as.factor(hour_label)
@@ -280,7 +469,7 @@ logit_null <- glm(susp_binary ~ 1,
 logit_full <- glm(susp_binary ~ infraction_cat + hour + weekday + location,
                   data   = pits_model_df,
                   family = binomial)
-
+# 
 summary(logit_full)
 
 # McFadden pseudo-R² — low value supports argument that
@@ -288,16 +477,21 @@ summary(logit_full)
 mcfadden_r2 <- 1 - (as.numeric(logLik(logit_full)) /
                       as.numeric(logLik(logit_null)))
 cat("McFadden pseudo-R²:", round(mcfadden_r2, 4), "\n")
-
+# 
 # # Tidy coefficient table
-# logit_tidy <- tidy(logit_full, exponentiate = TRUE, conf.int = TRUE) %>%
-#   arrange(p.value)
-# print(logit_tidy)
+logit_tidy <- tidy(logit_full, exponentiate = TRUE, conf.int = TRUE) %>%
+   arrange(p.value)
+ print(logit_tidy)
 
+#
 # Likelihood ratio test: does the full model fit better than null?
+
 lrt_result <- anova(logit_null, logit_full, test = "LRT")
+
 print(lrt_result)
+
 ```
+
 Different Logit model with just location
 ```{r}
 # Full model with incident characteristics
@@ -327,15 +521,15 @@ print(lrt_result)
 # =============================================================================
 # SECTION 3: Chi-square — suspensions not proportional to infraction type
 # =============================================================================
-A non-significant result here supports you: suspensions are equally likely regardless of what the infraction was
+changed to deduplicated data
 ```{r}
 #| warning: false
 #| message: false
 
 # Contingency table: infraction category × suspension binary
 infraction_susp_table <- table(
-  infraction = PITS_public$parsed_categories,
-  suspended  = PITS_public$susp_binary
+  infraction = PITS_deduplicated$parsed_categories1,
+  suspended  = PITS_deduplicated$susp_binary
 )
 
 print(infraction_susp_table)
@@ -344,9 +538,9 @@ chi_infraction <- chisq.test(infraction_susp_table)
 print(chi_infraction)
 
 # Expected vs observed suspension rate per infraction category
-infraction_rates <- PITS_public %>%
-  distinct(`Incident ID`, .keep_all = TRUE) %>% 
-  filter(!is.na(parsed_categories)) %>%
+infraction_rates <- PITS_deduplicated %>%
+  distinct(`Incident ID`, .keep_all = TRUE) %>%
+  filter(!is.na(parsed_categories1)) %>%
   group_by(parsed_categories) %>%
   summarise(
     n               = n(),
@@ -359,22 +553,23 @@ infraction_rates <- PITS_public %>%
 print(infraction_rates)
 ```
 
+Do not use these numbers with distinct incident id
 ```{r}
 library(dplyr)
 library(gt)
-
+# 
 # 1. Run your core analysis with string formatting additions
-infraction_table_data <- PITS_public %>% 
-  distinct(`Incident ID`, .keep_all = TRUE) %>% 
-  filter(!is.na(parsed_categories)) %>% 
-  group_by(parsed_categories) %>% 
+infraction_table_data <- PITS_public %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>%
+  filter(!is.na(parsed_categories)) %>%
+  group_by(parsed_categories) %>%
   summarise(
     n = n(),
     n_suspended = sum(susp_binary, na.rm = TRUE),
     suspension_rate = mean(susp_binary, na.rm = TRUE),
     .groups = "drop"
-  ) %>% 
-  arrange(desc(suspension_rate)) %>% 
+  ) %>%
+  arrange(desc(suspension_rate)) %>%
   # Apply sprintf to create a clean "n (% sample)" style or isolated percentage
   mutate(
     pct_formatted = sprintf("%.1f%%", suspension_rate * 100)
@@ -384,13 +579,13 @@ infraction_table_data <- PITS_public %>%
 # publishable_table <- infraction_table_data %>%
 #   select(parsed_categories, n, n_suspended, pct_formatted) %>%
 #   gt() %>%
-#   
+# 
 #   # Add clear, academic headers
 #   tab_header(
 #     title = md("**Suspension Rates Across Infraction Categories**"),
 #     subtitle = "Observed incident counts and suspension frequencies"
 #   ) %>%
-#   
+# 
 #   # Clean up column labels (replaces ugly variable names)
 #   cols_label(
 #     parsed_categories = "Infraction Category",
@@ -398,7 +593,7 @@ infraction_table_data <- PITS_public %>%
 #     n_suspended = "Suspensions (n)",
 #     pct_formatted = "Suspension Rate (%)"
 #   ) %>%
-#   
+# 
 #   # Apply professional academic styling rules (Minimalist/APA style)
 #   tab_options(
 #     table.border.top.color = "black",
@@ -414,10 +609,10 @@ infraction_table_data <- PITS_public %>%
 #     row.striping.background_color = "#f9f9f9",
 #     table.background.color = "white"
 #   ) %>%
-#   
+# 
 #   # Opt-in to subtle zebra striping for easier scanning
 #   opt_row_striping() %>%
-#   
+# 
 #   # Center the numeric data, left-align the categories
 #   cols_align(align = "left", columns = parsed_categories) %>%
 #   cols_align(align = "center", columns = c(n, n_suspended, pct_formatted))
@@ -432,20 +627,47 @@ infraction_table_data
 #| warning: false
 #| message: false
 
+# library(dplyr)
+#
+# 1. Get the true count and percentage of all category occurrences (No distinct)
+cat_counts <- PITS_deduplicated %>%
+  filter(!is.na(parsed_categories1)) %>%
+  count(parsed_categories1, name = "total_category_instances") %>%
+  mutate(pct_of_all_categories = total_category_instances / sum(total_category_instances) * 100)
+#
+# 2. Get the unique incident counts and suspension rates (With distinct)
+cat_suspensions <- PITS_deduplicated %>%
+  filter(!is.na(parsed_categories1)) %>%
+  distinct(`Incident ID`, parsed_categories1, .keep_all = TRUE) %>%
+  group_by(parsed_categories1) %>%
+  summarise(
+    unique_incidents = n(),
+    n_suspended = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE) * 100, # converted to %
+    .groups = "drop"
+  )
+
+# 3. Combine them into the final table
+categories_table <- cat_counts %>%
+  left_join(cat_suspensions, by = "parsed_categories1") %>%
+  arrange(desc(unique_incidents))
+
+print(categories_table)
+
 # Proportion of incidents by infraction category
-PITS_public %>%
-  distinct(`Incident ID`, .keep_all = TRUE) %>% 
-  filter(!is.na(parsed_categories)) %>%
-  count(parsed_categories) %>%
+category_counts <- PITS_deduplicated %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>%
+  filter(!is.na(parsed_categories1)) %>%
+  count(parsed_categories1) %>%
   mutate(pct = n / sum(n) * 100) %>%
   arrange(desc(n))
 
 # Suspension rate *within* each category
 # (are large categories also suspending at higher rates?)
-PITS_public %>%
-  distinct(`Incident ID`, .keep_all = TRUE) %>% 
-  filter(!is.na(parsed_categories)) %>%
-  group_by(parsed_categories) %>%
+PITS_deduplicated %>%
+  distinct(`Incident ID`, .keep_all = TRUE) %>%
+  filter(!is.na(parsed_categories1)) %>%
+  group_by(parsed_categories1) %>%
   summarise(
     n               = n(),
     n_suspended     = sum(susp_binary, na.rm = TRUE),
@@ -457,18 +679,24 @@ PITS_public %>%
 
 ```
 
-Tests whether suspension length varies by infraction category — if it doesn't, lengths aren't being calibrated to severity either
 ```{r}
-# Filter to suspended incidents only, with valid length
-susp_length_df <- PITS_public %>%
-  distinct(`Incident ID`, .keep_all = TRUE) %>% 
+table(PITS_deduplicated$parsed_categories1)
+```
+
+Tests whether suspension length varies by infraction category — if it doesn't, lengths aren't being calibrated to severity either
+### too logical inane
+
+```{r}
+# # Filter to suspended incidents only, with valid length
+susp_length_df <- PITS_deduplicated %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>%
   filter(susp_binary == 1,
          !is.na(Suspension_length),
-         !is.na(parsed_categories))
+         !is.na(parsed_categories1))
 
 # Descriptive: median length by infraction category
 length_by_infraction <- susp_length_df %>%
-  group_by(parsed_categories) %>%
+  group_by(parsed_categories1) %>%
   summarise(
     n              = n(),
     median_days    = median(Suspension_length),
@@ -482,7 +710,7 @@ print(length_by_infraction)
 
 # Kruskal-Wallis test
 kw_length <- kruskal.test(
-  Suspension_length ~ as.factor(parsed_categories),
+  Suspension_length ~ as.factor(parsed_categories1),
   data = susp_length_df
 )
 print(kw_length)
@@ -491,7 +719,7 @@ print(kw_length)
 # but run regardless — non-significant pairs support your argument)
 dunn_length <- dunn.test(
   x     = susp_length_df$Suspension_length,
-  g     = susp_length_df$parsed_categories,
+  g     = susp_length_df$parsed_categories1,
   method = "bonferroni",
   kw    = TRUE
 )
@@ -504,42 +732,190 @@ kw_location <- kruskal.test(
 print(kw_location)
 ```
 
+Define severity of categories
+```{r}
+# Define severity from highest to lowest
+# severity_hierarchy <- c(
+#   "Dangerous, Threatening, or Illegal Conduct", 
+#   "Disruptive Personal Behavior", 
+#   "Use and preservation of library materials and property", 
+#   "Incident Impact Level - Staff Traumatic Stress", 
+#   "Other", 
+#   "Children in the Library", 
+#   "No Infractions Set", 
+#   "Medical 911"
+# )
+```
 
+Code modified from Google AI
+```{r}
+library(dplyr)
+library(dunn.test)
+
+# 1. Isolate one dominant category per Incident ID based on severity
+susp_length_dominant <- PITS_deduplicated %>% 
+  filter(
+    susp_binary == 1, 
+    !is.na(Suspension_length), 
+    !is.na(parsed_categories1),
+    # parsed_categories %in% severity_hierarchy # ensures category matches your list
+  ) %>% 
+  # Convert to a factor matching your hierarchy order
+  # mutate(parsed_categories = factor(parsed_categories, levels = severity_hierarchy, ordered = TRUE)) %>% 
+  # Arrange by ID, then by the highest severity tier (lowest factor numeric value)
+  arrange(`Incident ID`, parsed_categories1) %>% 
+  # Keep only the first (most severe) row for each unique Incident ID
+  distinct(`Incident ID`, .keep_all = TRUE)
+
+# 2. Descriptive summary table for dominant infractions
+dominant_summary <- susp_length_dominant %>% 
+  group_by(parsed_categories1) %>% 
+  summarise(
+    n = n(),
+    median_days = median(Suspension_length),
+    mean_days = mean(Suspension_length),
+    sd_days = sd(Suspension_length),
+    .groups = "drop"
+  ) %>% 
+  arrange(parsed_categories1) # lists from highest to lowest severity
+
+print(dominant_summary)
+
+
+```
+
+```{r}
+# 3. Kruskal-Wallis test (Valid: one unique incident per row)
+kw_dominant <- kruskal.test(
+  Suspension_length ~ parsed_categories1, 
+  data = susp_length_dominant
+)
+
+print(kw_dominant)
+
+# 4. Dunn post-hoc test
+dunn_dominant <- dunn.test(
+  x = susp_length_dominant$Suspension_length,
+  g = susp_length_dominant$parsed_categories1,
+  method = "bonferroni",
+  kw = TRUE
+)
+
+print(dunn_dominant)
+```
+rework with location masked # not so significant with the p values in the DUNN
+```{r}
+# 1. Isolate one dominant category per Incident ID based on severity
+susp_length_dominant <- PITS_deduplicated %>% 
+  filter(
+    susp_binary == 1, 
+    !is.na(Suspension_length), 
+    !is.na(Location_masked),
+    # parsed_categories %in% severity_hierarchy # ensures category matches your list
+  ) %>% 
+  # Convert to a factor matching your hierarchy order
+  # mutate(parsed_categories = factor(parsed_categories, levels = severity_hierarchy, ordered = TRUE)) %>% 
+  # Arrange by ID, then by the highest severity tier (lowest factor numeric value)
+  arrange(`Incident ID`, Location_masked) %>% 
+  # Keep only the first (most severe) row for each unique Incident ID
+  distinct(`Incident ID`, .keep_all = TRUE)
+
+# 2. Descriptive summary table for dominant infractions
+dominant_summary <- susp_length_dominant %>% 
+  group_by(Location_masked) %>% 
+  summarise(
+    n = n(),
+    median_days = median(Suspension_length),
+    mean_days = mean(Suspension_length),
+    sd_days = sd(Suspension_length),
+    .groups = "drop"
+  ) %>% 
+  arrange(Location_masked) # lists from highest to lowest severity
+
+print(dominant_summary)
+
+# 3. Kruskal-Wallis test (Valid: one unique incident per row)
+kw_dominant <- kruskal.test(
+  Suspension_length ~ Location_masked, 
+  data = susp_length_dominant
+)
+
+print(kw_dominant)
+
+# 4. Dunn post-hoc test
+dunn_dominant <- dunn.test(
+  x = susp_length_dominant$Suspension_length,
+  g = susp_length_dominant$Location_masked,
+  method = "bonferroni",
+  kw = TRUE
+)
+
+print(dunn_dominant)
+```
+
+
+DO NOT USE
 # =============================================================================
 # SECTION 5 Poisson/NB regression — usage volume does not
 #                          predict incident counts (support)
 # =============================================================================
+# =============================================================================
+# Pre-compute ratio data (computer users vs incidents)
+# =============================================================================
+DO NOT USE
+
+```{r}
+# PITS_incident_counts1 <- PITS_deduplicated %>%
+#   # distinct(`Incident ID`, .keep_all = TRUE) %>% 
+#   group_by(Location_masked, date = as.Date(Date2)) %>%
+#   summarise(incident_count = n_distinct(`Incident ID`), .groups = "drop")
+# 
+# MyPC_counts <- MyPC_public %>%
+#   distinct(`Login ID`, .keep_all = TRUE) %>% 
+#   group_by(Location_masked, date = booking_date) %>%
+#   summarise(user_count = n(), .groups = "drop")
+# 
+# ratio_data1 <- MyPC_counts %>%
+#   full_join(PITS_incident_counts1, by = c("Location_masked", "date")) 
+# # %>%
+#   mutate(
+#     user_count     = replace_na(user_count,     0),
+#     incident_count = replace_na(incident_count, 0)
+#   )
+
+```
+
 
 ```{r}
 #| warning: false
 
-# Poisson model: do more computer users → more incidents?
-poisson_model <- glm(
-  incident_count ~ user_count + Location_masked,
-  data   = ratio_data,
-  family = poisson
-)
-summary(poisson_model)
-
-# Check for overdispersion (variance >> mean → use negative binomial)
-dispersion_ratio <- sum(residuals(poisson_model, type = "pearson")^2) /
-                    poisson_model$df.residual
-cat("Dispersion ratio:", round(dispersion_ratio, 3),
-    " (>1.5 suggests overdispersion → prefer NB)\n")
-
-# Negative binomial model (more robust if overdispersed)
-nb_model <- glm.nb(
-  incident_count ~ user_count + Location_masked,
-  data = ratio_data
-)
-summary(nb_model)
-
-# Tidy both for comparison
-tidy_poisson <- tidy(poisson_model, exponentiate = TRUE, conf.int = TRUE)
-tidy_nb      <- tidy(nb_model,      exponentiate = TRUE, conf.int = TRUE)
-
-cat("\n--- Poisson IRRs ---\n"); print(tidy_poisson)
-cat("\n--- Negative Binomial IRRs ---\n"); print(tidy_nb)
+# # Poisson model: do more computer users → more incidents?
+# poisson_model <- glm(
+#   incident_count ~ user_count + Location_masked,
+#   data   = ratio_data1,
+#   family = poisson
+# )
+# summary(poisson_model) # ratio data only has one row per incident but no accurate data on categories
+# 
+# # Check for overdispersion (variance >> mean → use negative binomial)
+# dispersion_ratio <- sum(residuals(poisson_model, type = "pearson")^2) /
+#                     poisson_model$df.residual
+# cat("Dispersion ratio:", round(dispersion_ratio, 3),
+#     " (>1.5 suggests overdispersion → prefer NB)\n")
+# 
+# # Negative binomial model (more robust if overdispersed)
+# nb_model <- glm.nb(
+#   incident_count ~ user_count + Location_masked,
+#   data = ratio_data
+# )
+# summary(nb_model)
+# 
+# # Tidy both for comparison
+# tidy_poisson <- tidy(poisson_model, exponentiate = TRUE, conf.int = TRUE)
+# tidy_nb      <- tidy(nb_model,      exponentiate = TRUE, conf.int = TRUE)
+# 
+# cat("\n--- Poisson IRRs ---\n"); print(tidy_poisson)
+# cat("\n--- Negative Binomial IRRs ---\n"); print(tidy_nb)
 ```
 
 
@@ -549,38 +925,113 @@ cat("\n--- Negative Binomial IRRs ---\n"); print(tidy_nb)
 # =============================================================================
 
 ```{r}
-# #| warning: false
-# #| message: false
-# 
-# # Contingency table: location × suspension binary
-# location_susp_table <- table(
-#   location  = PITS_public$Location_masked,
-#   suspended = PITS_public$susp_binary
-# )
-# 
-# print(location_susp_table)
-# 
-# chi_location <- chisq.test(location_susp_table)
-# print(chi_location)
-# 
-# # Standardised residuals — which locations suspend more/less than expected?
-# std_residuals <- as.data.frame(chi_location$stdres) %>%
-#   setNames(c("location", "suspended", "std_resid")) %>%
-#   filter(suspended == "1") %>%
-#   arrange(desc(std_resid))
-# 
-# cat("\nStandardised residuals (suspended == 1):\n")
-# print(std_residuals)
-# 
-# # Logistic regression: location as predictor of suspension
-# logit_location <- glm(
-#   susp_binary ~ Location_masked,
-#   data   = PITS_public,
-#   family = binomial
-# )
-# summary(logit_location)
-# tidy(logit_location, exponentiate = TRUE, conf.int = TRUE)
+#| warning: false
+#| message: false
+
+# PITS_public_ID <- PITS_public %>% 
+#   distinct(`Incident ID`, .keep_all = TRUE)
+
+# Contingency table: location × suspension binary
+location_susp_table <- table(
+  location  = PITS_deduplicated$Location_masked,
+  suspended = PITS_deduplicated$susp_binary
+)
+
+print(location_susp_table)
+
+chi_location <- chisq.test(location_susp_table)
+print(chi_location)
+
 ```
+### Chi-sq is significnt for location
+
+## repeated logit regression for location
+```{r}
+# 1. Deduplicate to one row per Incident ID (all incidents, not just suspended ones)
+incident_level_df <- PITS_deduplicated %>%
+  filter(!is.na(susp_binary), !is.na(Location_masked)) %>%
+  distinct(`Incident ID`, .keep_all = TRUE)
+
+# 2. Contingency table: location × suspension binary
+location_susp_table <- table(
+  location  = incident_level_df$Location_masked,
+  suspended = incident_level_df$susp_binary
+)
+print(location_susp_table)
+
+# 3. Chi-square test — is suspension likelihood associated with location?
+chi_location <- chisq.test(location_susp_table)
+print(chi_location)
+
+# 4. Cramér's V — effect size
+library(rcompanion)
+cramer_location <- cramerV(location_susp_table)
+cat("Cramér's V — Location:", cramer_location, "\n")
+
+# 5. Logistic regression — location as predictor of suspension (binary outcome)
+logit_location <- glm(
+  susp_binary ~ Location_masked,
+  data   = incident_level_df,
+  family = binomial
+)
+summary(logit_location)
+```
+
+
+## logit for hour
+```{r}
+# 1. Deduplicate to one row per Incident ID (all incidents, not just suspended ones)
+incident_level_df <- PITS_deduplicated %>%
+  filter(!is.na(susp_binary), !is.na(hour_label)) %>%
+  distinct(`Incident ID`, .keep_all = TRUE)
+
+# 2. Contingency table: location × suspension binary
+hour_table <- table(
+  location  = incident_level_df$hour_label,
+  suspended = incident_level_df$susp_binary
+)
+print(location_hour_table)
+
+# 3. Chi-square test — is suspension likelihood associated with location?
+chi_hour <- chisq.test(hour_table)
+print(chi_hour)
+
+# 4. Cramér's V — effect size
+library(rcompanion)
+cramer_hour <- cramerV(hour_table)
+cat("Cramér's V — Location:", cramer_hour, "\n")
+
+# 5. Logistic regression — location as predictor of suspension (binary outcome)
+logit_hour <- glm(
+  susp_binary ~ hour_label,
+  data   = incident_level_df,
+  family = binomial
+)
+summary(logit_hour)
+```
+### and the chi-sq for the hour-label is signifnicant
+
+```{r}
+# Standardised residuals — which locations suspend more/less than expected?
+std_residuals <- as.data.frame(chi_location$stdres) %>%
+  setNames(c("location", "suspended", "std_resid")) %>%
+  filter(suspended == "1") %>%
+  arrange(desc(std_resid))
+
+cat("\nStandardised residuals (suspended == 1):\n")
+print(std_residuals)
+
+# Logistic regression: location as predictor of suspension
+logit_location <- glm(
+  susp_binary ~ Location_masked,
+  data   = PITS_deduplicated,
+  family = binomial
+)
+summary(logit_location)
+tidy(logit_location, exponentiate = TRUE, conf.int = TRUE)
+
+```
+
 
 # =============================================================================
 # SECTION 7: Day of week and time of day — incidents and suspensions
@@ -591,49 +1042,49 @@ cat("\n--- Negative Binomial IRRs ---\n"); print(tidy_nb)
 #| message: false
 
 # ── 7a. Order weekdays Mon–Sun ────────────────────────────────────────────────
-weekday_levels <- c("Monday", "Tuesday", "Wednesday", "Thursday",
-                    "Friday", "Saturday", "Sunday")
+# weekday_levels <- c("Monday", "Tuesday", "Wednesday", "Thursday",
+#                     "Friday", "Saturday", "Sunday")
+# 
+# PITS_public <- PITS_public %>%
+#   mutate(PITS_weekday = factor(PITS_weekday, levels = weekday_levels))
 
-PITS_public <- PITS_public %>%
-  mutate(PITS_weekday = factor(PITS_weekday, levels = weekday_levels))
+# ── 7b. Incidents and suspensions by day of week ──────────────────────────────
+dow_summary <- PITS_deduplicated %>%
+  filter(!is.na(PITS_weekday)) %>%
+  group_by(PITS_weekday) %>%
+  summarise(
+    n_incidents   = n_distinct(`Incident ID`),
+    n_suspensions = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  )
 
-# # ── 7b. Incidents and suspensions by day of week ──────────────────────────────
-# dow_summary <- PITS_public %>%
-#   filter(!is.na(PITS_weekday)) %>%
-#   group_by(PITS_weekday) %>%
-#   summarise(
-#     n_incidents   = n_distinct(`Incident ID`),
-#     n_suspensions = sum(susp_binary, na.rm = TRUE),
-#     suspension_rate = mean(susp_binary, na.rm = TRUE),
-#     .groups = "drop"
-#   )
-# 
-# print(dow_summary)
-# 
-# # Chi-square: are incidents distributed evenly across days?
-# chisq_dow_incidents <- chisq.test(dow_summary$n_incidents)
-# cat("\nChi-square — incident counts across weekdays:\n")
-# print(chisq_dow_incidents)
-# 
-# # Chi-square: are suspensions distributed evenly across days?
-# chisq_dow_suspensions <- chisq.test(dow_summary$n_suspensions)
-# cat("\nChi-square — suspension counts across weekdays:\n")
-# print(chisq_dow_suspensions)
-# 
-# # ── 7c. Suspension rate by day — is any day more likely to suspend? ───────────
-# # Logistic regression with weekday as predictor
-# logit_dow <- glm(
-#   susp_binary ~ PITS_weekday,
-#   data   = PITS_public %>% filter(!is.na(PITS_weekday)),
-#   family = binomial
-# )
-# cat("\nLogistic regression — weekday as predictor of suspension:\n")
-# tidy(logit_dow, exponentiate = TRUE, conf.int = TRUE) %>% print()
+print(dow_summary)
+
+# Chi-square: are incidents distributed evenly across days?
+chisq_dow_incidents <- chisq.test(dow_summary$n_incidents)
+cat("\nChi-square — incident counts across weekdays:\n")
+print(chisq_dow_incidents)
+
+# Chi-square: are suspensions distributed evenly across days?
+chisq_dow_suspensions <- chisq.test(dow_summary$n_suspensions)
+cat("\nChi-square — suspension counts across weekdays:\n")
+print(chisq_dow_suspensions)
+
+# ── 7c. Suspension rate by day — is any day more likely to suspend? ───────────
+# Logistic regression with weekday as predictor
+logit_dow <- glm(
+  susp_binary ~ PITS_weekday,
+  data   = PITS_deduplicated %>% filter(!is.na(PITS_weekday)),
+  family = binomial
+)
+cat("\nLogistic regression — weekday as predictor of suspension:\n")
+tidy(logit_dow, exponentiate = TRUE, conf.int = TRUE) %>% print()
 
 # In Section 7b — filter Sunday out
-dow_summary <- PITS_public %>%
-  distinct(`Incident ID`, .keep_all = TRUE) %>% 
-  filter(!is.na(PITS_weekday), PITS_weekday != "Sunday") %>%
+dow_summary <- PITS_deduplicated %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>% 
+  # filter(!is.na(PITS_weekday), PITS_weekday != "Sunday") %>%
   group_by(PITS_weekday) %>%
   summarise(
     n_incidents     = n_distinct(`Incident ID`),
@@ -645,31 +1096,32 @@ dow_summary <- PITS_public %>%
 # In Section 7c — filter Sunday out of the logistic regression too
 logit_dow <- glm(
   susp_binary ~ PITS_weekday,
-  data   = PITS_public %>% filter(!is.na(PITS_weekday), PITS_weekday != "Sunday"),
+  data   = PITS_deduplicated %>% filter(!is.na(PITS_weekday), PITS_weekday != "Sunday"),
   family = binomial
 )
 # ── 7d. Incidents and suspensions by hour of day ──────────────────────────────
-# hour_summary <- PITS_public %>%
-#   filter(!is.na(hour_label)) %>%
-#   group_by(hour_label) %>%
-#   summarise(
-#     n_incidents     = n_distinct(`Incident ID`),
-#     n_suspensions   = sum(susp_binary, na.rm = TRUE),
-#     suspension_rate = mean(susp_binary, na.rm = TRUE),
-#     .groups = "drop"
-#   ) %>%
-#   arrange(hour_label)
+hour_summary <- PITS_deduplicated %>%
+  filter(!is.na(hour_label)) %>%
+  group_by(hour_label) %>%
+  summarise(
+    n_incidents     = n_distinct(`Incident ID`),
+    n_suspensions   = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(hour_label)
 
-dow_summary
+print(dow_summary)
 
 ```
+
 
 ```{r}
 library(lubridate)
 
 
-hour_summary <- PITS_public %>%
-  distinct(`Incident ID`, .keep_all = TRUE) %>% 
+hour_summary <- PITS_deduplicated %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>% 
   filter(!is.na(hour_label)) %>%
   mutate(hour_label = substr(hour_label, 1, 2)) %>%
   group_by(hour_label) %>%
@@ -686,13 +1138,13 @@ hour_summary <- PITS_public %>%
 # (use raw binary per row, not aggregated rates)
 kw_hour <- kruskal.test(
   susp_binary ~ as.factor(hour_label),
-  data = PITS_public %>% filter(!is.na(hour_label))
+  data = PITS_deduplicated %>% filter(!is.na(hour_label))
 )
 cat("\nKruskal-Wallis — suspension rate by hour of day:\n")
 print(kw_hour)
 
 # ── 7e. Cross-tab: day of week × hour of day (incident counts) ───────────────
-dow_hour_table <- PITS_public %>%
+dow_hour_table <- PITS_deduplicated %>%
   distinct(`Incident ID`, .keep_all = TRUE) %>% 
   filter(!is.na(PITS_weekday), !is.na(hour_label)) %>%
   group_by(PITS_weekday, hour_label) %>%
@@ -705,10 +1157,10 @@ dow_hour_table <- PITS_public %>%
 
 # Peak combinations — top 10 by incident count
 # cat("\nTop 10 day × hour combinations by incident count:\n")
-# dow_hour_table <- dow_hour_table %>%
-#   arrange(desc(n_incidents)) %>%
-#   slice_head(n = 10) %>%
-#   print()
+dow_hour_table <- dow_hour_table %>%
+  arrange(desc(n_incidents)) %>%
+  slice_head(n = 10) %>%
+  print()
 
 # Peak combinations — top 10 by suspension rate (min 5 incidents to filter noise)
 cat("\nTop 10 day × hour combinations by suspension rate (n ≥ 5):\n")
@@ -719,26 +1171,11 @@ dow_hour_table <- dow_hour_table %>%
   print()
 ```
 
-Day of Week
-Incident counts are not evenly distributed (χ² p < .0001). Tuesday, Thursday, and Wednesday are the busiest days (586, 616, 526 incidents), while Sunday is nearly absent (9 incidents). This likely reflects library operating hours and foot traffic patterns rather than anything behavioral.
-The more interesting finding is the suspension rate pattern. Suspension rates fall as the week progresses:
-DaySuspension RateMonday48.8%Tuesday43.6%Wednesday43.8%Thursday42.3%Friday35.0%Saturday31.1%Sunday29.4%
-The logistic regression confirms this is statistically significant for Tuesday through Saturday (all p < .05), with Monday as the reference category. The odds ratios tell you the direction clearly — by Friday, an incident is only 0.57 times as likely to result in suspension as the same incident on a Monday, and Saturday drops to 0.48. Sunday is not significant, likely because n=9 is too small to detect an effect.
-How to frame this: Early-week incidents are substantially more likely to result in suspension than late-week incidents, even though the nature of the infraction hasn't changed. This is consistent with a discretionary application argument — staff behavior around suspension varies systematically by day in a way the written policy doesn't explain or prescribe.
 
-Hour of Day
-The early-morning hours are an immediate data quality flag. Hours 00:00–06:00 have very small n (1–10 incidents) but produce extreme suspension rates — 92.9% at 04:00, 78.6% at 02:00. These are almost certainly data entry errors or timestamp anomalies rather than real overnight incidents, since most public libraries are not open at 2–4am. I'd recommend either filtering these out of the analysis or noting them as artifacts.
-The meaningful hours are 08:00 onward. The Kruskal-Wallis is significant (χ² = 249, p < .0001), so suspension rates genuinely vary by hour. You'll want to print the full table to see the afternoon pattern clearly.
-
-Day × Hour combinations
-Two distinct patterns emerge:
-Peak incident volume clusters in weekday afternoons, 13:00–16:00 — Thursday 15:00 (n=92), Wednesday 14:00 (n=88), Thursday 16:00 (n=84). This is your busy period, likely corresponding to after-school hours and afternoon foot traffic.
-Peak suspension rates cluster around 17:00 on weekdays — Monday 17:00 (85.4%), Tuesday 17:00 (71.7%), Thursday 17:00 (69.1%). This is striking because 17:00 is not the busiest hour for incidents, but it produces the highest suspension rates. One plausible explanation: 17:00 is approaching closing time at many branches, and staff may be more likely to suspend as a way of resolving a situation before end of shift rather than leaving it open.
-Wednesday 16:00 is an outlier worth flagging — 72 incidents but 102 suspensions (suspension rate 60.7%). The fact that suspensions exceed incidents suggests some incidents generated multiple suspension records, which may be worth investigating in your data.
 
 ```{r}
-incident_hour_table <- PITS_public %>%
-  distinct(`Incident ID`, .keep_all = TRUE) %>% 
+incident_hour_table <- PITS_deduplicated %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>% 
   filter(!is.na(PITS_weekday), !is.na(hour_label)) %>%
   group_by(PITS_weekday, hour_label) %>%
   summarise(
@@ -762,15 +1199,23 @@ incident_hour_table
 
 ```{r fig.width=9, fig.height=4}
 # Incidents by day of week
-ggplot(dow_summary, aes(x = PITS_weekday, y = n_incidents)) +
+
+dow_summary_exc <- dow_summary %>% 
+      filter(!is.na(PITS_weekday), PITS_weekday != "Sunday") %>%
+      mutate(PITS_weekday = factor(PITS_weekday, 
+                          levels = c("Monday", "Tuesday","Wednesday",
+                                     "Thursday", "Friday","Saturday"), 
+                          ordered = TRUE))
+
+ggplot(dow_summary_exc, aes(x = PITS_weekday, y = n_incidents)) +
   geom_col(fill = "steelblue") +
   geom_text(aes(label = n_incidents), vjust = -0.4, size = 3.5) +
   labs(title = "Incidents by Day of Week",
        x = NULL, y = "Number of Incidents") +
-  theme_minimal()
+  theme_minimal() # dow_summary is based off of deduped data
 
 # Suspension rate by day of week
-ggplot(dow_summary, aes(x = PITS_weekday, y = suspension_rate)) +
+ggplot(dow_summary_exc, aes(x = PITS_weekday, y = suspension_rate)) +
   geom_col(fill = "coral") +
    # geom_text(aes(label = n_suspensions), vjust = -0.4, size = 3.5) +
   geom_text(aes(label = scales::percent(suspension_rate, accuracy = 1)),
@@ -780,6 +1225,8 @@ ggplot(dow_summary, aes(x = PITS_weekday, y = suspension_rate)) +
        x = NULL, y = "Suspension Rate") +
   theme_minimal()
 ```
+
+
 
 ```{r fig.width=11, fig.height=4}
 # Incidents by hour of day
@@ -913,27 +1360,121 @@ dow_hour_table %>%
 #   )
 
 # Generate new_login_id using MD5 hash
-library(digest)
-MyPC_public$new_login_id <- sapply(MyPC_public$`Login ID`, digest, algo="md5")
+# library(digest)
+# MyPC_public$new_login_id <- sapply(MyPC_public$`Login ID`, digest, algo="md5")
 
-# In Section 8a — filter Sunday out of MyPC
-MyPC_dow <- MyPC_public %>%
+# # In Section 8a — filter Sunday out of MyPC
+# MyPC_dow <- MyPC_public %>%
+#   distinct(new_login_id, .keep_all = TRUE) %>%
+#   # distinct(`Login ID`, .keep_all = TRUE) %>% 
+#   filter(!is.na(MyPC_weekday), MyPC_weekday != "Sunday") %>%
+#   group_by(MyPC_weekday) %>%
+#   summarise(
+#     n_sessions     = n(),
+#     n_unique_users = n_distinct(new_login_id),
+#     # n_unique_users = n_distinct(`Login ID`),
+#     .groups = "drop"
+#   )
+# 
+# MyPC_dow
+
+# ── 8a. Summarise MyPC usage by day of week ───────────────────────────────────
+# MyPC_public <- MyPC_public %>%
+#   mutate(MyPC_weekday = factor(MyPC_weekday, levels = weekday_levels))
+# 
+# mypc_dow <- MyPC_public %>%
+#   filter(!is.na(MyPC_weekday)) %>%
+#   group_by(MyPC_weekday) %>%
+#   summarise(
+#     n_sessions    = n(),
+#     n_unique_users = n_distinct(new_login_id),
+#     .groups = "drop"
+#   )
+
+
+```
+
+```{r}
+# ── 8a. Summarise MyPC usage by day of week ───────────────────────────────────
+# MyPC_public <- MyPC_public %>%
+#   mutate(MyPC_weekday = factor(MyPC_weekday, levels = weekday_levels))
+# 
+# mypc_dow <- MyPC_public %>%
+#   filter(!is.na(MyPC_weekday)) %>%
+#   group_by(MyPC_weekday) %>%
+#   summarise(
+#     n_sessions    = n(),
+#     n_unique_users = n_distinct(new_login_id),
+#     .groups = "drop"
+#   )
+
+# filter out sunday
+mypc_dow <- MyPC_public %>%
   distinct(new_login_id, .keep_all = TRUE) %>%
-  # distinct(`Login ID`, .keep_all = TRUE) %>% 
   filter(!is.na(MyPC_weekday), MyPC_weekday != "Sunday") %>%
   group_by(MyPC_weekday) %>%
   summarise(
     n_sessions     = n(),
     n_unique_users = n_distinct(new_login_id),
-    # n_unique_users = n_distinct(`Login ID`),
     .groups = "drop"
   )
+print(mypc_dow)
 
-MyPC_dow
 
 
 ```
 
+
+```{r}
+# ── 8b. Join MyPC usage with incident counts by weekday ───────────────────────
+# dow_combined <- dow_summary %>%
+dow_combined <- dow_summary %>%
+  left_join(mypc_dow, by = c("PITS_weekday" = "MyPC_weekday")) %>%
+  mutate(
+    incidents_per_100_sessions = (n_incidents / n_sessions) * 100,
+    suspensions_per_100_sessions = (n_suspensions / n_sessions) * 100
+  )
+
+print(dow_combined)
+```
+
+
+```{r}
+# ── 8c. Correlation: do busier days produce more incidents? ───────────────────
+cor_sessions_incidents <- cor.test(
+  dow_combined$n_sessions,
+  dow_combined$n_incidents,
+  method = "spearman"
+)
+cat("\nSpearman correlation — sessions vs. incidents by weekday:\n")
+print(cor_sessions_incidents)
+
+cor_sessions_suspensions <- cor.test(
+  dow_combined$n_sessions,
+  dow_combined$n_suspensions,
+  method = "spearman"
+)
+cat("\nSpearman correlation — sessions vs. suspensions by weekday:\n")
+print(cor_sessions_suspensions)
+
+```
+
+
+
+
+```{r fig.width = 9, fig.height = 4}
+#| warning: false
+#| message: false
+# ── 8d. Correlation: does higher usage predict higher suspension RATE? ─────────
+# the p value is too high to say that rate of pc use increase affects suspension
+cor_sessions_rate <- cor.test(
+  dow_combined$n_sessions,
+  dow_combined$suspension_rate,
+  method = "spearman"
+)
+cat("\nSpearman correlation — sessions vs. suspension rate by weekday:\n")
+print(cor_sessions_rate)
+```
 
 
 ```{r fig.width = 9, fig.height = 4}
@@ -945,7 +1486,7 @@ dow_combined %>%
   dplyr::select(PITS_weekday, n_incidents, n_sessions) %>%
   pivot_longer(cols = c(n_incidents, n_sessions),
                names_to = "metric", values_to = "count") %>%
-  mutate(metric = recode(metric,
+  dplyr::mutate(metric = dplyr::recode(metric,
                          n_incidents = "Incidents",
                          n_sessions  = "Computer Sessions")) %>%
   ggplot(aes(x = PITS_weekday, y = count, fill = metric)) +
@@ -993,6 +1534,7 @@ ggplot(
 #| message: false
 
 library(ggrepel)
+# ── 8g. Suspension rate vs. session volume scatterplot ────────────────────────
 
 ggplot(dow_combined, aes(x = n_sessions, y = suspension_rate, label = PITS_weekday)) + 
   geom_point(size = 3, colour = "steelblue") + 
@@ -1005,33 +1547,114 @@ ggplot(dow_combined, aes(x = n_sessions, y = suspension_rate, label = PITS_weekd
        y = "Suspension Rate") + 
   theme_minimal()
 ```
+Check duplicate ids
+
+```{r}
+library(dplyr)
+# Tidyverse approach to isolate all duplicates
+all_dupes <- PITS_public %>%
+  filter(`Incident ID` %in% `Incident ID`[duplicated(`Incident ID`)]) %>%
+  arrange(`Incident ID`)
+
+# # Keep only the ID and columns that actually contain differences
+# varying_data <- all_dupes %>%
+#   group_by(`Incident ID`) %>%
+#   filter(any(n_distinct(across(everything())) > 1)) %>% # checks if rows differ at all
+#   select(`Incident ID`, where(~ any(n_distinct(.) > 1)))
+# 
+# print(varying_data)
+```
+
+
+
+moved up to an earlier section
+```{r}
+# get seasons
+# PITS_public <- PITS_public %>%
+#   mutate(
+#     month_num   = as.integer(format(Date2, "%m")),
+#     month_name  = factor(format(Date2, "%B"),
+#                          levels = month.name),  # orders Jan–Dec correctly
+#     season      = case_when(
+#       month_num %in% c(6, 7, 8)  ~ "Summer",
+#       month_num %in% c(9, 10, 11) ~ "Fall",
+#       month_num %in% c(12, 1, 2)  ~ "Winter",
+#       month_num %in% c(3, 4, 5)   ~ "Spring",
+#       TRUE ~ NA_character_
+#     ),
+#     season = factor(season, levels = c("Winter", "Spring", "Summer", "Fall"))
+#   )
+# 
+# 
+# month_summary <- PITS_public %>%
+#   filter(!is.na(month_name)) %>%
+#   group_by(month_name) %>%
+#   summarise(
+#     n_incidents     = n_distinct(`Incident ID`),
+#     n_suspensions   = sum(susp_binary, na.rm = TRUE),
+#     suspension_rate = mean(susp_binary, na.rm = TRUE),
+#     .groups = "drop"
+#   )
+# 
+# 
+# season_summary <- PITS_public %>%
+#   filter(!is.na(season)) %>%
+#   group_by(season) %>%
+#   summarise(
+#     n_incidents     = n_distinct(`Incident ID`),
+#     n_suspensions   = sum(susp_binary, na.rm = TRUE),
+#     suspension_rate = mean(susp_binary, na.rm = TRUE),
+#     .groups = "drop"
+#   )
+# 
+# print(season_summary)
+```
 
 1. Add cramer's v test 
 ```{r}
 library(rcompanion)
+# PITS_public2 <- PITS_public %>% 
+#    distinct(`Incident ID`, .keep_all = TRUE)
 
 location_susp_table <- table(
-  location  = PITS_public$Location_masked,
-  suspended = PITS_public$susp_binary
+  location  = PITS_deduplicated$Location_masked,
+  suspended = PITS_deduplicated$susp_binary
 )
+
 
 # print(location_susp_table)
 # Location × suspension
 cramer_location <- cramerV(location_susp_table)
 cat("Cramér's V — Location:", cramer_location, "\n")
 
+# season × suspension
+season_susp_table <- table(
+  season   = PITS_deduplicated$season,
+  suspended = PITS_deduplicated$susp_binary
+)
+cramer_season <- cramerV(season_susp_table)
+cat("Cramér's V — Season:", cramer_season, "\n")
+
+# month × suspension
+month_susp_table <- table(
+  month   = PITS_deduplicated$month_name,
+  suspended = PITS_deduplicated$susp_binary
+)
+cramer_month <- cramerV(month_susp_table)
+cat("Cramér's V — Month:", cramer_month, "\n")
+
 # Weekday × suspension
 weekday_susp_table <- table(
-  weekday   = PITS_public$PITS_weekday,
-  suspended = PITS_public$susp_binary
+  weekday   = PITS_deduplicated$PITS_weekday,
+  suspended = PITS_deduplicated$susp_binary
 )
 cramer_weekday <- cramerV(weekday_susp_table)
 cat("Cramér's V — Weekday:", cramer_weekday, "\n")
 
 # Hour × suspension
 hour_susp_table <- table(
-  hour      = PITS_public$hour_label,
-  suspended = PITS_public$susp_binary
+  hour      = PITS_deduplicated$hour_label,
+  suspended = PITS_deduplicated$susp_binary
 )
 cramer_hour <- cramerV(hour_susp_table)
 cat("Cramér's V — Hour:", cramer_hour, "\n")
@@ -1041,7 +1664,8 @@ cat("Cramér's V — Hour:", cramer_hour, "\n")
 2. Combined logistic regression — compare contribution of each predictor
 This is the key test. Put location, weekday, and hour into the same model and see which one contributes the most explanatory power when the others are controlled for.
 ```{r}
-combined_df <- PITS_public %>%
+combined_df <- PITS_deduplicated %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>% 
   filter(!is.na(susp_binary), !is.na(Location_masked),
          !is.na(PITS_weekday), !is.na(hour_label))
 
@@ -1070,18 +1694,72 @@ anova(logit_no_weekday, logit_combined, test = "LRT")
 cat("\nDoes removing Hour hurt the model?\n")
 anova(logit_no_hour, logit_combined, test = "LRT")
 ```
-collapse spase hours
-```{r}
-combined_df %>%
-  count(Location_masked, susp_binary) %>%
-  pivot_wider(names_from = susp_binary, values_from = n, values_fill = 0) %>%
-  filter(`1` < 3 | `0` < 3)  # flag branches with near-zero cells
 
-combined_df %>%
-  count(hour_label, susp_binary) %>%
-  pivot_wider(names_from = susp_binary, values_from = n, values_fill = 0) %>%
-  filter(`1` < 3 | `0` < 3)  # flag hours with near-zero cells
+collapse closed hours
+```{r}
+# combined_df %>%
+#   count(Location_masked, susp_binary) %>%
+#   pivot_wider(names_from = susp_binary, values_from = n, values_fill = 0) %>%
+#   filter(`1` < 3 | `0` < 3)  # flag branches with near-zero cells
+# 
+# combined_df %>%
+#   count(hour_label, susp_binary) %>%
+#   pivot_wider(names_from = susp_binary, values_from = n, values_fill = 0) %>%
+#   filter(`1` < 3 | `0` < 3)  # flag hours with near-zero cells
 ```
+## Exclude hours and Sunday
+```{r}
+# Hours to exclude: 21:00–23:00 and 00:00–09:00 (keep only 9:00–20:00)
+excluded_hours <- sprintf("%02d:00:00", c(21:23, 0:9))
+
+# levels(PITS_deduplicated$hour_label)
+# excluded_hours %in% levels(PITS_deduplicated$hour_label)
+
+combined_df_exc <- PITS_deduplicated %>%
+  filter(PITS_weekday != "Sunday") %>% 
+  filter(!is.na(susp_binary), !is.na(Location_masked),
+         !is.na(PITS_weekday), !is.na(hour_label),
+         !hour_label %in% excluded_hours) %>%
+  mutate(hour_label = droplevels(hour_label))  # drop the now-unused factor levels
+
+# Full model
+logit_combined_exc <- glm(
+  susp_binary ~ Location_masked + PITS_weekday + hour_label,
+  data   = combined_df_exc,
+  family = binomial
+)
+summary(logit_combined_exc)
+```
+Rerun with EXCLUDED hours and no Sunday
+```{r}
+
+# Full model
+# logit_combined <- glm(
+#   susp_binary ~ Location_masked + PITS_weekday + hour_label,
+#   data   = combined_df,
+#   family = binomial
+# )
+# summary(logit_combined)
+
+# Drop each block and compare fit via likelihood ratio test
+logit_no_location_exc <- glm(susp_binary ~ PITS_weekday + hour_label,
+                         data = combined_df_exc, family = binomial)
+logit_no_weekday_exc   <- glm(susp_binary ~ Location_masked + hour_label,
+                         data = combined_df_exc, family = binomial)
+logit_no_hour_exc       <- glm(susp_binary ~ Location_masked + PITS_weekday,
+                         data = combined_df_exc, family = binomial)
+
+cat("\nDoes removing Location hurt the model (excluded)? (larger stat = location matters more)\n")
+anova(logit_no_location_exc, logit_combined_exc, test = "LRT")
+
+cat("\nDoes removing Weekday hurt the model (excluded)?\n")
+
+anova(logit_no_weekday_exc, logit_combined_exc, test = "LRT")
+
+cat("\nDoes removing Hour hurt the model (excluded)?\n")
+anova(logit_no_hour_exc, logit_combined_exc, test = "LRT")
+```
+
 
 Next: Cramér's V and pseudo-R² for the final piece
 Once the separation issue is addressed, re-run:
@@ -1115,14 +1793,18 @@ cat("Pseudo-R² — Location alone:", round(mcfadden(logit_location, logit_null)
 cat("Pseudo-R² — Weekday alone: ", round(mcfadden(logit_weekday, logit_null), 4), "\n")
 cat("Pseudo-R² — Hour alone:    ", round(mcfadden(logit_hour, logit_null), 4), "\n")
 ```
+
 4.  Mixed-effects model — treat location as a random effect
-If you want to go further, a mixed model quantifies how much of the unexplained variance in suspension is attributable to branch-level clustering, independent of time effects.
+a mixed model quantifies how much of the unexplained variance in suspension is attributable to branch-level clustering, independent of time effects.
 ```{r}
 library(lme4)
 
 mixed_model <- glmer(
-  susp_binary ~ PITS_weekday + hour_label + (1 | Location_masked),
-  data   = combined_df,
+  susp_binary ~ 
+    PITS_weekday +
+    hour_label + 
+    (1 | Location_masked),
+  data   = combined_df_exc,
   family = binomial
 )
 summary(mixed_model)
@@ -1131,6 +1813,7 @@ summary(mixed_model)
 library(performance)
 icc(mixed_model)
 ```
+
 deviations from the average log-odds of suspension
 ```{r}
 library(lme4)
@@ -1154,6 +1837,24 @@ ggplot(ranef_branch, aes(x = reorder(Location_masked, random_effect),
        x = NULL, y = "Random Effect (log-odds deviation)") +
   theme_minimal()
 ```
+```{r}
+
+# 1. Fit your mixed model
+model <- lmer(Suspension_length ~ (1 | Location_masked), data = combined_df)
+
+# 2. Extract variance components
+variance_components <- as.data.frame(VarCorr(model))
+
+# 3. Pull out specific variances
+var_between  <- variance_components$vcov[variance_components$grp == "Location_masked"]
+var_residual <- variance_components$vcov[variance_components$grp == "Residual"]
+
+# 4. Calculate the equation
+manual_icc <- var_between / (var_between + var_residual)
+
+cat("Manual Intercept ICC:", manual_icc, "\n")
+```
+
 
 # =============================================================================
 # SECTION 9: Month / Season — do summer months lead to more suspensions?
@@ -1161,7 +1862,8 @@ ggplot(ranef_branch, aes(x = reorder(Location_masked, random_effect),
 
 ```{r}
 # ── 9a. Extract month from Date2 ──────────────────────────────────────────────
-PITS_public <- PITS_public %>%
+PITS_public_ID <- PITS_public_ID %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>% 
   mutate(
     month_num   = as.integer(format(Date2, "%m")),
     month_name  = factor(format(Date2, "%B"),
@@ -1177,7 +1879,8 @@ PITS_public <- PITS_public %>%
   )
 
 # ── 9b. Incidents and suspensions by month ────────────────────────────────────
-month_summary <- PITS_public %>%
+month_summary <- PITS_deduplicated %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>% 
   filter(!is.na(month_name)) %>%
   group_by(month_name) %>%
   summarise(
@@ -1189,8 +1892,13 @@ month_summary <- PITS_public %>%
 
 print(month_summary)
 
+
+```
+
+```{r}
 # ── 9c. Incidents and suspensions by season ───────────────────────────────────
-season_summary <- PITS_public %>%
+season_summary <- PITS_public_ID %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>% 
   filter(!is.na(season)) %>%
   group_by(season) %>%
   summarise(
@@ -1204,8 +1912,8 @@ print(season_summary)
 
 # ── 9d. Chi-square — are incidents/suspensions evenly distributed by month? ───
 month_susp_table <- table(
-  month     = PITS_public$month_name,
-  suspended = PITS_public$susp_binary
+  month     = PITS_public_ID$month_name,
+  suspended = PITS_public_ID$susp_binary
 )
 
 chi_month <- chisq.test(month_susp_table)
@@ -1217,13 +1925,19 @@ library(rcompanion)
 cramer_month <- cramerV(month_susp_table)
 cat("Cramér's V — Month:", cramer_month, "\n")
 
+```
+
+
+
+```{r}
 # ── 9e. Season as a simpler two-level test (Summer vs. rest) ─────────────────
-PITS_public <- PITS_public %>%
+PITS_public_ID <- PITS_public_ID %>%
+  # distinct(`Incident ID`, .keep_all = TRUE) %>% 
   mutate(is_summer = if_else(season == "Summer", "Summer", "Non-Summer"))
 
 summer_table <- table(
-  is_summer = PITS_public$is_summer,
-  suspended = PITS_public$susp_binary
+  is_summer = PITS_public_ID$is_summer,
+  suspended = PITS_public_ID$susp_binary
 )
 print(summer_table)
 
@@ -1232,7 +1946,7 @@ cat("\nChi-square — Summer vs. Non-Summer:\n")
 print(chi_summer)
 
 # Proportion test — is summer suspension rate significantly different?
-summer_rates <- PITS_public %>%
+summer_rates <- PITS_public_ID %>%
   filter(!is.na(is_summer)) %>%
   group_by(is_summer) %>%
   summarise(n = n(), n_suspended = sum(susp_binary, na.rm = TRUE), .groups = "drop")
@@ -1244,17 +1958,22 @@ prop_test_summer <- prop.test(
 cat("\nProportion test — Summer vs. Non-Summer suspension rate:\n")
 print(prop_test_summer)
 
+```
+
+
+
+```{r}
 # ── 9f. Logistic regression — month as predictor ──────────────────────────────
 logit_month <- glm(
   susp_binary ~ month_name,
-  data   = PITS_public %>% filter(!is.na(month_name)),
+  data   = PITS_public_ID %>% filter(!is.na(month_name)),
   family = binomial
 )
 cat("\nLogistic regression — month as predictor of suspension:\n")
 tidy(logit_month, exponentiate = TRUE, conf.int = TRUE) %>% print()
 
 # ── 9g. Does month matter once location/weekday/hour are controlled for? ─────
-combined_df_month <- PITS_public %>%
+combined_df_month <- PITS_public_ID %>%
   filter(!is.na(susp_binary), !is.na(Location_masked),
          !is.na(PITS_weekday), !is.na(hour_label), !is.na(month_name))
 
@@ -1276,6 +1995,8 @@ logit_month_alone <- glm(susp_binary ~ month_name, data = combined_df_month, fam
 mcfadden <- function(model, null) 1 - as.numeric(logLik(model)) / as.numeric(logLik(null))
 cat("Pseudo-R² — Month alone:", round(mcfadden(logit_month_alone, logit_null_month), 4), "\n")
 ```
+
+
 
 ```{r fig.width=10, fig.height=4}
 # ── 9h. Visualise suspension rate by month ────────────────────────────────────
@@ -1300,6 +2021,53 @@ ggplot(season_summary, aes(x = season, y = suspension_rate)) +
   theme_minimal()
 ```
 
+# Predictor Cramers_V Pseudo_R2_Nagelkerke
+
+```{r}
+library(dplyr)
+library(purrr)
+library(rstatix)
+library(performance)
+
+# 1. Define your outcome and your list of predictor variables
+outcome_var <- "susp_binary"
+predictors  <- c("parsed_categories", "Location_masked", 
+                 "hour_label", "PITS_weekday")
+
+# 2. Map through predictors to build the metrics table
+metrics_table <- map_df(predictors, function(pred) {
+  
+  # Clean data subset removing NAs for the specific pair to avoid bias
+  clean_df <- PITS_public %>% 
+    filter(!is.na(.data[[outcome_var]]), !is.na(.data[[pred]]))
+  
+  # Calculate Cramér's V (bivariate nominal association)
+  # Convert numeric predictors to factors for the contingency table
+  v_val <- clean_df %>% 
+    select(all_of(c(outcome_var, pred))) %>% 
+    mutate(across(everything(), as.factor)) %>% 
+    table() %>% 
+    rstatix::cramer_v()
+  
+  # Calculate Pseudo R-squared (via a single-variable GLM model)
+  model_formula <- as.formula(paste(outcome_var, "~", pred))
+  fit <- glm(model_formula, data = clean_df, family = binomial(link = "logit"))
+  
+  pseudo_r2 <- as.numeric(performance::r2_nagelkerke(fit))
+  
+  # Return data frame row
+  data.frame(
+    Predictor = pred,
+    Cramers_V = round(v_val, 4),
+    Pseudo_R2_Nagelkerke = round(pseudo_r2, 4)
+  )
+})
+
+# 3. View table ranked by predictive strength
+metrics_table <- metrics_table %>% arrange(desc(Pseudo_R2_Nagelkerke))
+print(metrics_table)
+```
+
 # =============================================================================
 # SECTION 10: Mixed-effects model with season added
 # =============================================================================
@@ -1313,7 +2081,7 @@ excluded_hours <- sprintf("%02d:00:00", 00:7)
 
 
 # Prepare data — ensure season, weekday, hour, and location are all present
-mixed_df <- PITS_public %>%
+mixed_df <- PITS_public_ID %>%
   filter(!is.na(susp_binary), !is.na(Location_masked),
          !is.na(PITS_weekday), !is.na(hour_label), !is.na(season)) %>% 
   filter(PITS_weekday != "Sunday",
@@ -1375,6 +2143,8 @@ ggplot(ranef_branch_season, aes(x = reorder(Location_masked, random_effect),
        x = NULL, y = "Random Effect (log-odds deviation)") +
   theme_minimal()
 ```
+
+
 ```{r}
 
 ```
