@@ -1,0 +1,578 @@
+---
+title: "PITS_visual_output"
+format: html
+editor: visual
+---
+```{r}
+library(ggplot2)
+library(tidyverse)
+```
+
+
+# ── 7f. Visualisations ────────────────────────────────────────────────────────
+
+```{r fig.width=9, fig.height=4}
+# Incidents by day of week
+dow_summary <- PITS_deduplicated %>%
+  filter(!is.na(PITS_weekday)) %>%
+  group_by(PITS_weekday) %>%
+  summarise(
+    n_incidents   = n_distinct(`Incident ID`),
+    n_suspensions = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  )
+dow_summary_exc <- dow_summary %>% 
+      filter(!is.na(PITS_weekday), PITS_weekday != "Sunday") %>%
+      mutate(PITS_weekday = factor(PITS_weekday, 
+                          levels = c("Monday", "Tuesday","Wednesday",
+                                     "Thursday", "Friday","Saturday"), 
+                          ordered = TRUE))
+
+ggplot(dow_summary_exc, aes(x = PITS_weekday, y = n_incidents)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = n_incidents), vjust = -0.4, size = 3.5) +
+  labs(title = "Incidents by Day of Week",
+       x = NULL, y = "Number of Incidents") +
+  theme_minimal() # dow_summary is based off of deduped data
+
+# Suspension rate by day of week
+ggplot(dow_summary_exc, aes(x = PITS_weekday, y = suspension_rate)) +
+  geom_col(fill = "coral") +
+   # geom_text(aes(label = n_suspensions), vjust = -0.4, size = 3.5) +
+  geom_text(aes(label = scales::percent(suspension_rate, accuracy = 1)),
+            vjust = -0.4, size = 3.5) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Suspension Rate by Day of Week",
+       x = NULL, y = "Suspension Rate") +
+  theme_minimal()
+```
+
+
+
+```{r fig.width=11, fig.height=4}
+# Incidents by hour of day
+hour_summary <- PITS_deduplicated %>%
+  filter(!is.na(hour_label)) %>%
+  mutate(
+    hour_display = format(strptime(hour_label, format = "%H:%M:%S"), "%I%p"),
+    hour_display = tolower(sub("^0", "", hour_display))
+  ) %>%
+  group_by(hour_label, hour_display) %>%
+  summarise(
+    n_incidents     = n_distinct(`Incident ID`),
+    n_suspensions   = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(hour_label)
+
+ggplot(hour_summary, aes(x = hour_label, y = n_incidents)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Incidents by Hour of Day",
+       x = "Hour", y = "Number of Incidents") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Suspension rate by hour of day
+ggplot(hour_summary, aes(x = hour_label, y = suspension_rate)) +
+  geom_col(fill = "coral") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Suspension Rate by Hour of Day",
+       x = "Hour", y = "Suspension Rate") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r fig.width=11, fig.height=6}
+#| warning: false
+#| message: false
+# Define hours to exclude (midnight through 7am)
+# excluded_hours <- sprintf("%02d:00:00", 22:7)
+
+# Heatmap: incidents by day × hour
+# dow_hour_table %>%
+#   filter(PITS_weekday != "Sunday",
+#          !hour_label %in% excluded_hours) %>%
+#   mutate(rate_display = ifelse(n_incidents < 5, NA, suspension_rate)) %>%
+#   ggplot(aes(x = hour_label, y = PITS_weekday, fill = n_incidents)) +
+#   geom_tile(colour = "white") +
+#     scale_fill_gradient(low = "white", high = "coral",
+#                       name = "Susp. Rate",
+#                       labels = scales::percent_format(),
+#                       na.value = "grey90") +
+#   labs(title = "Incident Count Heatmap: Day of Week × Hour of Day",
+#        x = "Hour", y = NULL) +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# # Heatmap: suspension rate by day × hour (cells with n < 5 greyed out)
+# dow_hour_table %>%
+#   filter(PITS_weekday != "Sunday",
+#          !hour_label %in% excluded_hours) %>%
+#   mutate(rate_display = ifelse(n_incidents < 5, NA, suspension_rate)) %>%
+#   ggplot(aes(x = hour_label, y = PITS_weekday, fill = rate_display)) +
+#   geom_tile(colour = "white") +
+#   scale_fill_gradient(low = "white", high = "coral",
+#                       name = "Susp. Rate",
+#                       labels = scales::percent_format(),
+#                       na.value = "grey90") +
+#   labs(title = "Suspension Rate Heatmap: Day of Week × Hour of Day",
+#        subtitle = "Grey = fewer than 5 incidents",
+#        x = "Hour", y = NULL) +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dow_hour_table <- PITS_deduplicated %>%
+  distinct(`Incident ID`, .keep_all = TRUE) %>% 
+  filter(!is.na(PITS_weekday), !is.na(hour_label)) %>%
+  group_by(PITS_weekday, hour_label) %>%
+  summarise(
+    n_incidents     = n_distinct(`Incident ID`),
+    n_suspensions   = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# # Heatmap: incidents by day × hour
+ggplot(dow_hour_table,
+       aes(x = hour_label, y = PITS_weekday, fill = n_incidents)) +
+  geom_tile(colour = "white") +
+  scale_fill_gradient(low = "white", high = "steelblue",
+                      name = "Incidents") +
+  labs(title = "Incident Count Heatmap: Day of Week × Hour of Day",
+       x = "Hour", y = NULL) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+#
+# 
+# Heatmap: suspension rate by day × hour (cells with n < 5 greyed out)
+# dow_hour_table %>%
+#   filter(PITS_weekday != "Sunday") %>%
+#   mutate(rate_display = ifelse(n_incidents < 5, NA, suspension_rate)) %>%
+#   ggplot(aes(x = hour_label, y = PITS_weekday, fill = rate_display)) +
+#   geom_tile(colour = "white") +
+#   scale_fill_gradient(low = "white", high = "coral",
+#                       name = "Susp. Rate",
+#                       labels = scales::percent_format(),
+#                       na.value = "grey90") +
+#   labs(title = "Suspension Rate Heatmap: Day of Week × Hour of Day (Sunday excluded)",
+#        subtitle = "Grey = fewer than 5 incidents",
+#        x = "Hour", y = NULL) +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+dow_hour_table %>%
+  filter(PITS_weekday != "Sunday") %>%
+  mutate(
+    # Convert PITS_weekday to an ordered factor
+    PITS_weekday = factor(PITS_weekday, 
+                          levels = c("Saturday", "Friday", "Thursday", "Wednesday",
+                                     "Tuesday", "Monday"), 
+                          ordered = TRUE),
+    rate_display = ifelse(n_incidents < 5, NA, suspension_rate)
+  ) %>%
+  ggplot(aes(x = hour_label, y = PITS_weekday, fill = rate_display)) +
+  geom_tile(colour = "white") +
+  scale_fill_gradient(low = "white", high = "coral",
+                      name = "Susp. Rate",
+                      labels = scales::percent_format(),
+                      na.value = "grey90") +
+  labs(title = "Suspension Rate Heatmap: Day of Week × Hour of Day (Sunday excluded)",
+       subtitle = "Grey = fewer than 5 incidents",
+       x = "Hour", y = NULL) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+# =============================================================================
+# SECTION 8: MyPC usage volume by day of week — are busy days incident days?
+# =============================================================================
+# not statistically significant
+```{r}
+#| warning: false
+#| message: false
+
+# ── 8a. Summarise MyPC usage by day of week ───────────────────────────────────
+# MyPC_public <- MyPC_public %>%
+#   mutate(MyPC_weekday = factor(MyPC_weekday, levels = weekday_levels))
+# 
+# mypc_dow <- MyPC_public %>%
+#   filter(!is.na(MyPC_weekday)) %>%
+#   group_by(MyPC_weekday) %>%
+#   summarise(
+#     n_sessions    = n(),
+#     n_unique_users = n_distinct(new_login_id),
+#     .groups = "drop"
+#   )
+
+# Generate new_login_id using MD5 hash
+# library(digest)
+# MyPC_public$new_login_id <- sapply(MyPC_public$`Login ID`, digest, algo="md5")
+
+# # In Section 8a — filter Sunday out of MyPC
+# MyPC_dow <- MyPC_public %>%
+#   distinct(new_login_id, .keep_all = TRUE) %>%
+#   # distinct(`Login ID`, .keep_all = TRUE) %>% 
+#   filter(!is.na(MyPC_weekday), MyPC_weekday != "Sunday") %>%
+#   group_by(MyPC_weekday) %>%
+#   summarise(
+#     n_sessions     = n(),
+#     n_unique_users = n_distinct(new_login_id),
+#     # n_unique_users = n_distinct(`Login ID`),
+#     .groups = "drop"
+#   )
+# 
+# MyPC_dow
+
+# ── 8a. Summarise MyPC usage by day of week ───────────────────────────────────
+# MyPC_public <- MyPC_public %>%
+#   mutate(MyPC_weekday = factor(MyPC_weekday, levels = weekday_levels))
+# 
+# mypc_dow <- MyPC_public %>%
+#   filter(!is.na(MyPC_weekday)) %>%
+#   group_by(MyPC_weekday) %>%
+#   summarise(
+#     n_sessions    = n(),
+#     n_unique_users = n_distinct(new_login_id),
+#     .groups = "drop"
+#   )
+
+
+```
+
+
+
+
+
+```{r fig.width = 9, fig.height = 4}
+#| warning: false
+#| message: false
+
+mypc_dow <- MyPC_public %>%
+  distinct(new_login_id, .keep_all = TRUE) %>%
+  filter(!is.na(MyPC_weekday), MyPC_weekday != "Sunday") %>%
+  group_by(MyPC_weekday) %>%
+  summarise(
+    n_sessions     = n(),
+    n_unique_users = n_distinct(new_login_id),
+    .groups = "drop"
+  )
+
+# excluded sundays 
+dow_combined <- dow_summary_exc %>%
+  left_join(mypc_dow, by = c("PITS_weekday" = "MyPC_weekday")) %>%
+  mutate(
+    incidents_per_100_sessions = (n_incidents / n_sessions) * 100,
+    suspensions_per_100_sessions = (n_suspensions / n_sessions) * 100
+  )
+
+# ── 8e. Visualise: sessions vs incidents by weekday ───────────────────────────
+dow_combined %>%
+  dplyr::select(PITS_weekday, n_incidents, n_sessions) %>%
+  pivot_longer(cols = c(n_incidents, n_sessions),
+               names_to = "metric", values_to = "count") %>%
+  dplyr::mutate(metric = dplyr::recode(metric,
+                         n_incidents = "Incidents",
+                         n_sessions  = "Computer Sessions")) %>%
+  ggplot(aes(x = PITS_weekday, y = count, fill = metric)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c("Computer Sessions" = "steelblue",
+                                "Incidents"         = "coral")) +
+  labs(title = "Computer Sessions vs. Incidents by Day of Week",
+       x = NULL, y = "Count", fill = NULL) +
+  theme_minimal()
+
+# ── 8f. Incidents per 100 sessions — normalised incident rate ─────────────────
+dow_combined %>% 
+  mutate(
+    # Convert PITS_weekday to an ordered factor
+    PITS_weekday = factor(PITS_weekday, 
+                          levels = c("Monday", "Tuesday","Wednesday",
+                                     "Thursday", "Friday","Saturday"), 
+                          ordered = TRUE)
+  ) %>%
+ggplot(
+       aes(x = PITS_weekday, y = incidents_per_100_sessions)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(incidents_per_100_sessions, 2)),
+            vjust = -0.4, size = 3.5) +
+  labs(title = "Incidents per 100 Computer Sessions by Day of Week (Sunday excluded)",
+       # subtitle = "Normalises for usage volume — higher = more incidents relative to visitors",
+       x = NULL, y = "Incidents per 100 Sessions") +
+  theme_minimal()
+
+# ── 8g. Suspension rate vs. session volume scatterplot ────────────────────────
+# ggplot(dow_combined,
+#        aes(x = n_sessions, y = suspension_rate, label = PITS_weekday)) +
+#   geom_point(size = 3, colour = "steelblue") +
+#   geom_text(vjust = -0.7, size = 3.5) +
+#   geom_smooth(method = "lm", se = TRUE, colour = "coral", linewidth = 0.8) +
+#   scale_y_continuous(labels = scales::percent_format()) +
+#   labs(title = "Suspension Rate vs. Computer Session Volume by Weekday (Sunday excluded)",
+#        subtitle = "If volume drove suspension rates, points would trend upward",
+#        x = "Number of Computer Sessions", y = "Suspension Rate") +
+#   theme_minimal()
+```
+
+
+
+```{r}
+#| warning: false
+#| message: false
+
+library(ggrepel)
+# ── 8g. Suspension rate vs. session volume scatterplot ────────────────────────
+
+ggplot(dow_combined, aes(x = n_sessions, y = suspension_rate, label = PITS_weekday)) + 
+  geom_point(size = 3, colour = "steelblue") + 
+  geom_smooth(method = "lm", se = TRUE, colour = "coral", linewidth = 0.8) + 
+  # Added min.segment.length = Inf to hide the dashes
+  geom_text_repel(size = 3.5, nudge_y = -0.005, box.padding = 0.4, point.padding = 0.2, min.segment.length = Inf) + 
+  scale_y_continuous(labels = scales::percent_format()) + 
+  labs(title = "Suspension Rate vs. Computer Session Volume by Weekday (Sunday excluded)", 
+       x = "Number of Computer Sessions", 
+       y = "Suspension Rate") + 
+  theme_minimal()
+```
+
+
+```{r}
+# ── 8g. Incidents vs. session volume scatterplot ────────────────────────
+# no sundays 
+# excluded hours
+
+ggplot(dow_combined, aes(x = n_sessions, y = n_incidents, label = PITS_weekday)) + 
+  geom_point(size = 3, colour = "steelblue") + 
+  geom_smooth(method = "lm", se = TRUE, colour = "coral", linewidth = 0.8) + 
+  # Added min.segment.length = Inf to hide the dashes
+  geom_text_repel(size = 3.5, nudge_y = -0.005, box.padding = 0.4, point.padding = 0.2, min.segment.length = Inf) + 
+  # scale_y_continuous(labels = scales::percent_format()) + 
+  labs(title = "Incidents vs. Computer Session Volume by Weekday (Sunday excluded)", 
+       x = "Number of Computer Sessions", 
+       y = "Incidents") + 
+  theme_minimal()
+```
+
+produce for hour label 
+suspension rate 
+```{r}
+
+```
+
+
+produce for hour label 
+incident 
+```{r}
+# ── Build hourly usage summary from MyPC ──────────────────────────────────────
+mypc_hour <- MyPC_public %>%
+  distinct(new_login_id, .keep_all = TRUE) %>%
+  filter(!is.na(hour_label)) %>%
+  group_by(hour_label) %>%
+  summarise(
+    n_sessions     = n(),
+    n_unique_users = n_distinct(new_login_id),
+    .groups = "drop"
+  )
+
+# ── Join with your existing hour_summary (incidents/suspensions by hour) ──────
+hour_combined <- hour_summary %>%
+  left_join(mypc_hour, by = "hour_label") %>%
+  mutate(
+    incidents_per_100_sessions   = (n_incidents / n_sessions) * 100,
+    suspensions_per_100_sessions = (n_suspensions / n_sessions) * 100
+  )
+
+print(hour_combined)
+
+
+# ── Filter to top 10 hours by incident count ───────────────────────────────────
+library(lubridate)
+# hour_top10 <- hour_combined %>%
+#   arrange(desc(n_incidents)) %>%
+#   slice_head(n = 10) %>%
+#   mutate(
+#     hour_display = format(strptime(hour_label, format = "%H:%M:%S"), "%-I%p"),
+#     hour_display = tolower(hour_display)   # "4pm" instead of "4PM"
+#   )
+# 
+# # ── Scatterplot: sessions vs incidents, labeled by hour ────────────────────────
+# ggplot(hour_top10, aes(x = n_sessions, y = n_incidents, label = hour_display)) +
+#   geom_point(size = 3, colour = "steelblue") +
+#   geom_smooth(method = "lm", se = TRUE, colour = "coral", linewidth = 0.8) +
+#   geom_text_repel(size = 3.5, nudge_y = 1, box.padding = 0.4,
+#                   point.padding = 0.2, min.segment.length = Inf) +
+#   labs(title = "Incidents vs. Computer Session Volume — Top 10 Hours by Incident Count",
+#        x = "Number of Computer Sessions", y = "Incidents") +
+#   theme_minimal()
+
+# ── Filter to top 10 hours by incident count ───────────────────────────────────
+hour_top10 <- hour_combined %>%
+  arrange(desc(n_incidents)) %>%
+  slice_head(n = 10)
+
+# ── Scatterplot: sessions vs incidents, labeled by hour ────────────────────────
+ggplot(hour_top10, aes(x = n_sessions, y = n_incidents, label = hour_label)) +
+  geom_point(size = 3, colour = "steelblue") +
+  geom_smooth(method = "lm", se = TRUE, colour = "coral", linewidth = 0.8) +
+  geom_text_repel(size = 3.5, nudge_y = 1, box.padding = 0.4,
+                  point.padding = 0.2, min.segment.length = Inf) +
+  labs(title = "Incidents vs. Computer Session Volume — Top 10 Hours by Incident Count",
+       x = "Number of Computer Sessions", y = "Incidents") +
+  theme_minimal()
+```
+
+
+4.  Mixed-effects model — treat location as a random effect
+a mixed model quantifies how much of the unexplained variance in suspension is attributable to branch-level clustering, independent of time effects.
+```{r}
+# Hours to exclude: 21:00–23:00 and 00:00–09:00 (keep only 9:00–20:00)
+excluded_hours <- sprintf("%02d:00:00", c(21:23, 0:9))
+
+# levels(PITS_deduplicated$hour_label)
+# excluded_hours %in% levels(PITS_deduplicated$hour_label)
+
+combined_df_exc <- PITS_deduplicated %>%
+  filter(PITS_weekday != "Sunday") %>% 
+  filter(!is.na(susp_binary), !is.na(Location_masked),
+         !is.na(PITS_weekday), !is.na(hour_label),
+         !hour_label %in% excluded_hours) %>%
+  mutate(hour_label = droplevels(hour_label))  # drop the now-unused factor levels
+
+library(lme4)
+
+mixed_model <- glmer(
+  susp_binary ~ 
+    PITS_weekday +
+    hour_label + 
+    (1 | Location_masked),
+  data   = combined_df_exc,
+  family = binomial
+)
+summary(mixed_model)
+
+# Intraclass correlation — how much variance is due to branch?
+library(performance)
+icc(mixed_model)
+```
+
+
+deviations from the average log-odds of suspension
+```{r}
+# library(lme4)
+
+ranef_branch <- ranef(mixed_model)$Location_masked
+ranef_branch$Location_masked <- rownames(ranef_branch)
+names(ranef_branch)[1] <- "random_effect"
+
+ranef_branch <- ranef_branch %>%
+  arrange(desc(random_effect))
+
+print(ranef_branch)
+
+# Visualize
+ggplot(ranef_branch, aes(x = reorder(Location_masked, random_effect),
+                         y = random_effect)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Branch-Level Random Effects (Suspension Likelihood)",
+       subtitle = "excluding Sundays and hours 8pm to 9am",
+       x = NULL, y = "Random Effect (log-odds deviation)") +
+  theme_minimal()
+```
+```{r}
+
+# 1. Fit your mixed model
+model <- lmer(Suspension_length ~ (1 | Location_masked), data = PITS_deduplicated)
+
+# 2. Extract variance components
+variance_components <- as.data.frame(VarCorr(model))
+
+# 3. Pull out specific variances
+var_between  <- variance_components$vcov[variance_components$grp == "Location_masked"]
+var_residual <- variance_components$vcov[variance_components$grp == "Residual"]
+
+# 4. Calculate the equation
+manual_icc <- var_between / (var_between + var_residual)
+
+cat("Manual Intercept ICC:", manual_icc, "\n")
+```
+
+
+
+```{r fig.width=10, fig.height=4}
+# ── 9h. Visualise suspension rate by month ────────────────────────────────────
+ggplot(month_summary, aes(x = month_name, y = suspension_rate, group = 1)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = scales::percent(suspension_rate, accuracy = 1)),
+            vjust = -0.4, size = 3.2) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Suspension Rate by Month",
+       x = NULL, y = "Suspension Rate") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Season comparison
+season_summary <- PITS_deduplicated %>%
+  filter(!is.na(season)) %>%
+  group_by(season) %>%
+  summarise(
+    n_incidents     = n_distinct(`Incident ID`),
+    n_suspensions   = sum(susp_binary, na.rm = TRUE),
+    suspension_rate = mean(susp_binary, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(season_summary, aes(x = season, y = suspension_rate)) +
+  geom_col(fill = "coral") +
+  geom_text(aes(label = scales::percent(suspension_rate, accuracy = 1)),
+            vjust = -0.4, size = 3.5) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Suspension Rate by Season",
+       x = NULL, y = "Suspension Rate") +
+  theme_minimal()
+```
+
+
+
+
+```{r fig.width=8, fig.height=6}
+# Prepare data — ensure season, weekday, hour, and location are all present
+mixed_df <- PITS_deduplicated %>%
+  filter(!is.na(susp_binary), !is.na(Location_masked),
+         !is.na(PITS_weekday), !is.na(hour_label), !is.na(season)) %>% 
+  filter(PITS_weekday != "Sunday",
+         !hour_label %in% excluded_hours)
+
+# ── Mixed model: weekday + hour + season as fixed effects, branch as random ──
+mixed_model_season <- glmer(
+  susp_binary ~ PITS_weekday + hour_label + season + (1 | Location_masked),
+  data    = mixed_df,
+  family  = binomial,
+  control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+)
+
+summary(mixed_model_season)
+
+# ── ICC — how much variance is due to branch, controlling for weekday/hour/season ──
+icc_season <- icc(mixed_model_season)
+print(icc_season)
+
+# ── Extract and rank branch-level random effects (with season controlled) ────
+ranef_branch_season <- ranef(mixed_model_season)$Location_masked
+ranef_branch_season$Location_masked <- rownames(ranef_branch_season)
+names(ranef_branch_season)[1] <- "random_effect"
+
+ranef_branch_season <- ranef_branch_season %>%
+  arrange(desc(random_effect))
+
+
+ggplot(ranef_branch_season, aes(x = reorder(Location_masked, random_effect),
+                                y = random_effect)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Branch-Level Random Effects (Suspension Likelihood)",
+       subtitle = "Controlling for weekday, hour, and season",
+       x = NULL, y = "Random Effect (log-odds deviation)") +
+  theme_minimal()
+```
