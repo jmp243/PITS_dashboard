@@ -5,7 +5,7 @@ editor: visual
 ---
 
 ### read in libraries
-last run 2026-07-31
+last run 2026-10-30
 
 ```{r}
 library(readr)
@@ -100,34 +100,7 @@ tibble(
 # ========================================================================
 # Clean PITS
 # ========================================================================
-remove the NA's for analysis and remove cases without the dates
-```{r}
-PITS_public <- PITS_public %>%
-  mutate(
-    # Convert string "NA" to real NA
-    `Suspension Status` = na_if(`Suspension Status`, "NA"),
-    `Suspension Type`   = na_if(`Suspension Type`,   "NA"),
-    Susp_Start_date     = na_if(as.character(Susp_Start_date), "NA"),
-    Susp_End_date       = na_if(as.character(Susp_End_date),   "NA"),
-    Susp_Start_date     = as.Date(Susp_Start_date),
-    Susp_End_date       = as.Date(Susp_End_date),
-    Date2               = as.Date(Date2),
 
-    Suspension_length = case_when(
-      is.na(Susp_End_date) | is.na(Susp_Start_date) ~ NA_real_,
-      Susp_End_date < Susp_Start_date               ~ NA_real_,
-      TRUE ~ as.numeric(Susp_End_date - Susp_Start_date)
-    ),
-
-    # Drive susp_binary off Suspension Type — avoids "NONE" miscount
-    susp_binary = ifelse(`Suspension Type` == "Suspended customer", 1L, 0L),
-    susp_binary = replace_na(susp_binary, 0L),
-
-    hour_label = fct_reorder(as.factor(hour_label), hour_label)
-  )
-PITS_public$PITS_weekday <- weekdays(PITS_public$Date2)
-
-```
 
 ## RECODE parsed categories
 ```{r}
@@ -211,6 +184,36 @@ category_counts <- PITS_public %>%
 
 
 ```
+
+remove the NA's for analysis and remove cases without the dates
+```{r}
+PITS_public <- PITS_public %>%
+  mutate(
+    # Convert string "NA" to real NA
+    `Suspension Status` = na_if(`Suspension Status`, "NA"),
+    `Suspension Type`   = na_if(`Suspension Type`,   "NA"),
+    Susp_Start_date     = na_if(as.character(Susp_Start_date), "NA"),
+    Susp_End_date       = na_if(as.character(Susp_End_date),   "NA"),
+    Susp_Start_date     = as.Date(Susp_Start_date),
+    Susp_End_date       = as.Date(Susp_End_date),
+    Date2               = as.Date(Date2),
+
+    Suspension_length = case_when(
+      is.na(Susp_End_date) | is.na(Susp_Start_date) ~ NA_real_,
+      Susp_End_date < Susp_Start_date               ~ NA_real_,
+      TRUE ~ as.numeric(Susp_End_date - Susp_Start_date)
+    ),
+
+    # Drive susp_binary off Suspension Type — avoids "NONE" miscount
+    susp_binary = ifelse(`Suspension Type` == "Suspended customer", 1L, 0L),
+    susp_binary = replace_na(susp_binary, 0L),
+
+    hour_label = fct_reorder(as.factor(hour_label), hour_label)
+  )
+PITS_public$PITS_weekday <- weekdays(PITS_public$Date2)
+
+```
+
 another view of table from calude on 10/13 Sonnet 5.5 Medium
 ```{r}
 library(gt)
@@ -454,6 +457,7 @@ PITS_deduplicated <- PITS_deduplicated %>%
         "Incident Impact Level - Staff Traumatic Stress", 
         "No Infractions Set", 
         "Medical", 
+        "Other",
         "Unattended Children"
       ) ~ "Minor Infractions",
       TRUE ~ parsed_categories
