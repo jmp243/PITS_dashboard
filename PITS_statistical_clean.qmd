@@ -23,6 +23,11 @@ library(lme4)        # only needed for the mixed-effects section at the end
 ```
 
 ### Shared helpers
+```{r}
+# visual_dir <- "visual_output"
+# dir.create(visual_dir, showWarnings = FALSE, recursive = TRUE)
+```
+
 
 Everything that was copy-pasted in the original lives here once.
 
@@ -120,10 +125,15 @@ style_gt <- function(tbl) {
       data_row.padding          = px(4)
     )
 }
-save_gt <- function(tbl, name) {
-  gtsave(tbl, paste0(name, ".docx"))   # Word
-  gtsave(tbl, paste0(name, ".png"))
+save_gt <- function(tbl, name, dir = visual_dir) {
+  dir.create(dir, showWarnings = FALSE, recursive = TRUE)
+  gtsave(tbl, file.path(dir, paste0(name, ".docx")))   # Word
+  gtsave(tbl, file.path(dir, paste0(name, ".png")))
 }
+# save_gt <- function(tbl, name) {
+#   gtsave(tbl, paste0(name, ".docx"))   # Word
+#   gtsave(tbl, paste0(name, ".png"))
+# }
 
 # Dunn's post hoc test (tie-corrected, two-sided, Bonferroni), returns a data frame
 dunn_bonferroni <- function(x, g) {
@@ -1040,8 +1050,8 @@ combined_df_exc <- PITS_deduplicated %>%
   filter(PITS_weekday != "Sunday") %>%
   filter(!is.na(susp_binary), !is.na(Location_masked),
          !is.na(PITS_weekday), !is.na(hour_label),
-         !hour_label %in% excl_hours_logit) %>%
-  mutate(hour_label = droplevels(hour_label))   # drop the now-unused factor levels
+         !hour_label %in% excl_hours_logit)
+  # mutate(hour_label = droplevels(hour_label))   # drop the now-unused factor levels
 
 logit_combined_exc <- glm(
   susp_binary ~ Location_masked + PITS_weekday + hour_label,
